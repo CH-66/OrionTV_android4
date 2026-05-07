@@ -119,7 +119,7 @@ public class MainActivity extends BaseActivity {
         grid.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                parent.setItemChecked(position, true);
+                grid.setItemChecked(position, true);
                 if (view != null) {
                     view.setActivated(true);
                     view.setSelected(true);

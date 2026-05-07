@@ -39,7 +39,7 @@ jobs:
 
       - name: Install legacy Android SDK packages
         run: |
-          yes | sdkmanager "platform-tools" "platforms;android-25" "build-tools;25.0.3"
+          yes | sdkmanager "platform-tools" "platforms;android-25" "build-tools;26.0.2"
 
       - name: Set up JDK 8 for legacy Gradle build
         uses: actions/setup-java@v4
@@ -50,7 +50,7 @@ jobs:
       - name: Set up Gradle 3.3
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: "3.3"
+          gradle-version: "4.1"
 
       - name: Get version from package.json
         id: package-version

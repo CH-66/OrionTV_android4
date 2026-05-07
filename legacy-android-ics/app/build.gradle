@@ -39,6 +39,6 @@ android {
 
 dependencies {
     compile 'com.squareup.okhttp3:okhttp:3.12.13'
-    compile 'com.google.code.gson:gson:2.8.9'
+    compile 'com.google.code.gson:gson:2.8.5'
     compile 'com.squareup.picasso:picasso:2.5.2'
 }

@@ -1,6 +1,5 @@
 package com.oriontv.legacy.media;
 
-import android.net.Uri;
 import android.util.Log;
 
 import com.oriontv.legacy.net.LegacyHttpCompat;
@@ -31,13 +30,16 @@ import okhttp3.Response;
 
 public class PlaybackProxyServer implements Closeable {
     private static final String TAG = "PlaybackProxy";
+    private static final int MAX_MAPPED_URLS = 128;
     private final OkHttpClient client = LegacyHttpCompat.newBuilder()
             .readTimeout(30, TimeUnit.SECONDS)
             .build();
     private final ExecutorService executor = Executors.newCachedThreadPool();
+    private final Map<String, String> mappedUrls = new LinkedHashMap<String, String>();
     private ServerSocket serverSocket;
     private volatile boolean running;
     private int port = -1;
+    private int nextStreamId = 1;
 
     public synchronized void ensureStarted() throws IOException {
         if (running && serverSocket != null) {
@@ -67,8 +69,10 @@ public class PlaybackProxyServer implements Closeable {
         }
         try {
             ensureStarted();
-            Log.d(TAG, "proxyUrl " + originalUrl + " -> http://127.0.0.1:" + port + "/relay?..."); 
-            return "http://127.0.0.1:" + port + "/relay?url=" + Uri.encode(originalUrl);
+            String id = rememberUrl(originalUrl);
+            String localUrl = "http://127.0.0.1:" + port + "/stream/" + id + playbackExtension(lower);
+            Log.d(TAG, "proxyUrl mapped id=" + id + " local=" + localUrl + " upstream=" + originalUrl);
+            return localUrl;
         } catch (IOException e) {
             Log.w(TAG, "Failed to start local relay for " + originalUrl, e);
             return originalUrl;
@@ -110,7 +114,7 @@ public class PlaybackProxyServer implements Closeable {
             String method = parts[0];
             String path = parts[1];
             Map<String, String> headers = readHeaders(input);
-            String upstream = extractUrl(path);
+            String upstream = resolveUpstream(path);
             if (upstream == null || upstream.length() == 0) {
                 sendError(output, 400, "Missing url");
                 return;
@@ -151,6 +155,12 @@ public class PlaybackProxyServer implements Closeable {
             }
             String contentType = response.header("Content-Type", "");
             boolean playlist = isPlaylist(upstreamUrl, contentType);
+            if (playlist && headRequest) {
+                Log.d(TAG, "Playlist HEAD masked as TS " + upstreamUrl);
+                sendHeaders(output, 200, statusText(200), "video/mp2t", -1, null, null, false);
+                output.flush();
+                return;
+            }
             if (playlist && !headRequest) {
                 String body = response.body().string();
                 Log.d(TAG, "Playlist flatten " + upstreamUrl + " bytes=" + body.length());
@@ -234,6 +244,41 @@ public class PlaybackProxyServer implements Closeable {
         String lowerUrl = url == null ? "" : url.toLowerCase(Locale.US);
         String lowerType = contentType == null ? "" : contentType.toLowerCase(Locale.US);
         return lowerUrl.contains(".m3u8") || lowerType.contains("mpegurl") || lowerType.contains("vnd.apple.mpegurl");
+    }
+
+    private synchronized String rememberUrl(String originalUrl) {
+        String id = String.valueOf(nextStreamId++);
+        if (nextStreamId == Integer.MAX_VALUE) {
+            nextStreamId = 1;
+        }
+        mappedUrls.put(id, originalUrl);
+        while (mappedUrls.size() > MAX_MAPPED_URLS) {
+            String firstKey = mappedUrls.keySet().iterator().next();
+            mappedUrls.remove(firstKey);
+        }
+        return id;
+    }
+
+    private String playbackExtension(String lowerUrl) {
+        String path = lowerUrl == null ? "" : lowerUrl;
+        int query = path.indexOf('?');
+        if (query >= 0) {
+            path = path.substring(0, query);
+        }
+        int fragment = path.indexOf('#');
+        if (fragment >= 0) {
+            path = path.substring(0, fragment);
+        }
+        if (path.contains(".m3u8") || path.endsWith(".ts") || path.contains(".ts/")) {
+            return ".ts";
+        }
+        if (path.endsWith(".mp4") || path.contains(".mp4/")) {
+            return ".mp4";
+        }
+        if (path.endsWith(".3gp") || path.contains(".3gp/")) {
+            return ".3gp";
+        }
+        return ".stream";
     }
 
     private void streamPlaylist(String playlistUrl, String body, OutputStream output, int depth) throws IOException {
@@ -320,6 +365,37 @@ public class PlaybackProxyServer implements Closeable {
             return URI.create(baseUrl).resolve(relative).toString();
         } catch (RuntimeException e) {
             return relative;
+        }
+    }
+
+    private String resolveUpstream(String path) throws Exception {
+        String mapped = extractMappedUrl(path);
+        if (mapped != null && mapped.length() > 0) {
+            return mapped;
+        }
+        return extractUrl(path);
+    }
+
+    private String extractMappedUrl(String path) {
+        if (path == null) {
+            return null;
+        }
+        int queryIndex = path.indexOf('?');
+        String cleanPath = queryIndex >= 0 ? path.substring(0, queryIndex) : path;
+        if (!cleanPath.startsWith("/stream/")) {
+            return null;
+        }
+        String id = cleanPath.substring("/stream/".length());
+        int dot = id.indexOf('.');
+        if (dot >= 0) {
+            id = id.substring(0, dot);
+        }
+        int slash = id.indexOf('/');
+        if (slash >= 0) {
+            id = id.substring(0, slash);
+        }
+        synchronized (this) {
+            return mappedUrls.get(id);
         }
     }
 

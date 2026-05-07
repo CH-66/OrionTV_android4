@@ -54,7 +54,9 @@ jobs:
 
       - name: Get version from package.json
         id: package-version
-        run: echo "version=$(node -p 'require(\"./package.json\").version')" >> "$GITHUB_OUTPUT"
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Ensure debug signing key exists
         run: |
@@ -82,10 +84,16 @@ jobs:
       - name: Rename APK
         run: |
           mkdir -p artifacts
+          apk=$(find legacy-android-ics/app/build/outputs/apk -name "*.apk" | head -n 1)
+          if [ -z "$apk" ]; then
+            echo "No APK found under legacy-android-ics/app/build/outputs/apk"
+            find legacy-android-ics/app/build/outputs -maxdepth 5 -type f || true
+            exit 1
+          fi
           if [ "${{ inputs.build_type }}" = "release" ]; then
-            cp legacy-android-ics/app/build/outputs/apk/app-release.apk artifacts/orionTV.${{ steps.package-version.outputs.version }}-android-ics-release.apk
+            cp "$apk" artifacts/orionTV.${{ steps.package-version.outputs.version }}-android-ics-release.apk
           else
-            cp legacy-android-ics/app/build/outputs/apk/app-debug.apk artifacts/orionTV.${{ steps.package-version.outputs.version }}-android-ics-debug.apk
+            cp "$apk" artifacts/orionTV.${{ steps.package-version.outputs.version }}-android-ics-debug.apk
           fi
 
       - name: Upload APK artifact

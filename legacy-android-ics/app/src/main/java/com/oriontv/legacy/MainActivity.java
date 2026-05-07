@@ -98,7 +98,7 @@ public class MainActivity extends BaseActivity {
         status = Ui.muted(this, "加载中", 16);
         root.addView(status);
 
-        GridView grid = new GridView(this);
+        final GridView grid = new GridView(this);
         grid.setNumColumns(GridView.AUTO_FIT);
         grid.setColumnWidth(Ui.dp(this, 160));
         grid.setHorizontalSpacing(Ui.dp(this, 12));

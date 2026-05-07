@@ -15,6 +15,7 @@ import com.oriontv.legacy.api.models.AppSettings;
 import com.oriontv.legacy.api.models.Channel;
 import com.oriontv.legacy.api.models.SearchResult;
 import com.oriontv.legacy.media.M3uParser;
+import com.oriontv.legacy.net.LegacyHttpCompat;
 import com.oriontv.legacy.ui.Ui;
 
 import java.io.IOException;
@@ -28,7 +29,7 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 public class LiveActivity extends BaseActivity {
-    private final OkHttpClient client = new OkHttpClient();
+    private final OkHttpClient client = LegacyHttpCompat.newClient();
     private final ArrayList<Channel> channels = new ArrayList<Channel>();
     private ArrayAdapter<String> adapter;
     private TextView status;
@@ -75,7 +76,11 @@ public class LiveActivity extends BaseActivity {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        status.setText("直播源加载失败：" + e.getMessage());
+                        if (LegacyHttpCompat.isTlsProblem(e)) {
+                            status.setText(LegacyHttpCompat.buildCompatMessage("直播源加载"));
+                        } else {
+                            status.setText("直播源加载失败：" + e.getMessage());
+                        }
                     }
                 });
             }
@@ -111,7 +116,7 @@ public class LiveActivity extends BaseActivity {
         live.title = "直播";
         live.poster = "";
         for (int i = 0; i < channels.size(); i++) {
-            live.episodes.add(channels.get(i).url);
+            live.episodes.add(app.playbackProxy().proxyUrl(channels.get(i).url));
         }
         ArrayList<SearchResult> sources = new ArrayList<SearchResult>();
         sources.add(live);

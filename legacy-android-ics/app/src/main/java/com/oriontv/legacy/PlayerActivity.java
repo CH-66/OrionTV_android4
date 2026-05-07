@@ -3,11 +3,11 @@ package com.oriontv.legacy;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.SurfaceView;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.view.SurfaceView;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
@@ -18,11 +18,11 @@ import com.oriontv.legacy.api.models.SearchResult;
 import com.oriontv.legacy.data.LocalRepository;
 import com.oriontv.legacy.media.LegacyPlayerController;
 import com.oriontv.legacy.media.PlaybackSourceSelector;
+import com.oriontv.legacy.net.LegacyHttpCompat;
 import com.oriontv.legacy.ui.Ui;
 
 import java.lang.reflect.Type;
 import java.util.ArrayList;
-import java.util.List;
 
 public class PlayerActivity extends BaseActivity implements LegacyPlayerController.Listener {
     private final Gson gson = new Gson();
@@ -122,10 +122,11 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             showOverlay("没有可播放地址");
             return;
         }
-        String url = currentSource.episodes.get(episodeIndex);
+        String originalUrl = currentSource.episodes.get(episodeIndex);
+        String playbackUrl = app.playbackProxy().proxyUrl(originalUrl);
         title.setText(currentSource.title + " / " + currentSource.source_name + " / 第" + (episodeIndex + 1) + "集");
         showOverlay("正在加载第" + (episodeIndex + 1) + "集");
-        controller.load(url);
+        controller.load(playbackUrl);
     }
 
     private void showOverlay(String text) {
@@ -145,7 +146,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         int key = event.getKeyCode();
         if (key == KeyEvent.KEYCODE_DPAD_CENTER || key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
             controller.playPause();
-            showOverlay("播放/暂停");
+            showOverlay("播放 / 暂停");
             return true;
         }
         if (key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_MEDIA_REWIND) {
@@ -214,6 +215,10 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             currentSource = fallback;
             showOverlay("播放失败，切换到 " + fallback.source_name);
             playCurrent();
+            return;
+        }
+        if (LegacyHttpCompat.isTlsProblem(new RuntimeException(message))) {
+            showOverlay(LegacyHttpCompat.buildCompatMessage("播放"));
         } else {
             showOverlay("播放失败：" + message);
         }

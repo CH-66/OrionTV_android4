@@ -20,6 +20,7 @@ import com.oriontv.legacy.api.models.SearchResponse;
 import com.oriontv.legacy.api.models.ServerConfig;
 import com.oriontv.legacy.api.models.VideoDetail;
 import com.oriontv.legacy.data.PreferencesStore;
+import com.oriontv.legacy.net.LegacyHttpCompat;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -29,8 +30,6 @@ import java.net.URISyntaxException;
 import java.net.URLEncoder;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
-
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.MediaType;
@@ -53,13 +52,7 @@ public class OrionApiClient {
         this.context = context.getApplicationContext();
         this.preferencesStore = preferencesStore;
         this.cookieStore = new CookieStore(preferencesStore);
-        this.client = new OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(20, TimeUnit.SECONDS)
-                .writeTimeout(20, TimeUnit.SECONDS)
-                .followRedirects(true)
-                .followSslRedirects(true)
-                .build();
+        this.client = LegacyHttpCompat.newBuilder().build();
     }
 
     public String getBaseUrl() {
@@ -119,6 +112,15 @@ public class OrionApiClient {
         client.newCall(builder.build()).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
+                main.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        Object tag = target.getTag();
+                        if (tag != null && url.equals(tag.toString())) {
+                            target.setImageResource(placeholderResId);
+                        }
+                    }
+                });
             }
 
             @Override
@@ -300,7 +302,7 @@ public class OrionApiClient {
         client.newCall(builder.build()).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                deliverError(callback, e);
+                deliverError(callback, adaptError(e, "网络请求"));
             }
 
             @Override
@@ -331,10 +333,17 @@ public class OrionApiClient {
                     }
                     deliverSuccess(callback, parsed);
                 } catch (RuntimeException e) {
-                    deliverError(callback, e);
+                    deliverError(callback, adaptError(e, "响应解析"));
                 }
             }
         });
+    }
+
+    private Throwable adaptError(Throwable error, String action) {
+        if (LegacyHttpCompat.isTlsProblem(error)) {
+            return new ApiException(LegacyHttpCompat.buildCompatMessage(action));
+        }
+        return error;
     }
 
     private String enc(String value) {

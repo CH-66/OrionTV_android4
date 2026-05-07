@@ -4,12 +4,15 @@ import android.content.Context;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.net.Uri;
+import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
 import java.io.IOException;
 
 public class LegacyPlayerController implements SurfaceHolder.Callback {
+    private static final String TAG = "LegacyPlayer";
+
     public interface Listener {
         void onPrepared(int durationMs);
         void onProgress(int positionMs, int durationMs);
@@ -48,6 +51,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
 
     public void load(String url) {
         pendingUrl = url;
+        Log.d(TAG, "load " + url);
         if (surfaceReady) {
             prepare(url);
         }
@@ -96,6 +100,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
 
     private void prepare(String url) {
         release();
+        Log.d(TAG, "prepare " + url);
         mediaPlayer = new MediaPlayer();
         mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
         mediaPlayer.setDisplay(surfaceView.getHolder());
@@ -103,6 +108,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
             @Override
             public void onPrepared(MediaPlayer mp) {
                 prepared = true;
+                Log.d(TAG, "onPrepared duration=" + mp.getDuration());
                 mp.start();
                 listener.onPrepared(mp.getDuration());
                 handler.post(progressRunnable);
@@ -111,6 +117,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
             @Override
             public void onCompletion(MediaPlayer mp) {
+                Log.d(TAG, "onCompletion");
                 listener.onCompleted();
             }
         });
@@ -118,6 +125,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
             @Override
             public boolean onError(MediaPlayer mp, int what, int extra) {
                 prepared = false;
+                Log.e(TAG, "onError what=" + what + " extra=" + extra + " url=" + pendingUrl);
                 listener.onError("MediaPlayer error " + what + "/" + extra);
                 return true;
             }
@@ -127,8 +135,10 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
             mediaPlayer.setDataSource(context, Uri.parse(url));
             mediaPlayer.prepareAsync();
         } catch (IOException e) {
+            Log.e(TAG, "setDataSource IOException " + url, e);
             listener.onError(e.getMessage());
         } catch (RuntimeException e) {
+            Log.e(TAG, "setDataSource RuntimeException " + url, e);
             listener.onError(e.getMessage());
         }
     }

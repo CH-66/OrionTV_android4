@@ -1,5 +1,7 @@
 package com.oriontv.legacy.media;
 
+import com.oriontv.legacy.net.LegacyHttpCompat;
+
 import java.io.IOException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -10,7 +12,7 @@ import okhttp3.Response;
 
 public class M3u8Inspector {
     private static final Pattern RESOLUTION = Pattern.compile("RESOLUTION=\\d+x(\\d+)", Pattern.CASE_INSENSITIVE);
-    private final OkHttpClient client = new OkHttpClient();
+    private final OkHttpClient client = LegacyHttpCompat.newClient();
 
     public String inspectResolution(String url) {
         if (url == null || !url.toLowerCase().contains(".m3u8")) {

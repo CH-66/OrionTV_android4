@@ -25,6 +25,7 @@ import com.oriontv.legacy.api.models.SearchResponse;
 import com.oriontv.legacy.api.models.SearchResult;
 import com.oriontv.legacy.data.LocalRepository;
 import com.oriontv.legacy.media.M3u8Inspector;
+import com.oriontv.legacy.net.LegacyHttpCompat;
 import com.oriontv.legacy.ui.Ui;
 
 import java.util.ArrayList;
@@ -46,6 +47,7 @@ public class DetailActivity extends BaseActivity {
     private String preferredSource;
     private String preferredId;
     private int pendingSources;
+    private int tlsFailures;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -174,6 +176,7 @@ public class DetailActivity extends BaseActivity {
             status.setText("没有可用视频源");
             return;
         }
+        tlsFailures = 0;
         pendingSources = resources.size();
         for (int i = 0; i < resources.size(); i++) {
             final ApiSite site = resources.get(i);
@@ -197,6 +200,9 @@ public class DetailActivity extends BaseActivity {
 
                 @Override
                 public void onError(Throwable error) {
+                    if (LegacyHttpCompat.isTlsProblem(error)) {
+                        tlsFailures++;
+                    }
                     oneSourceDone();
                 }
             });
@@ -207,7 +213,11 @@ public class DetailActivity extends BaseActivity {
         pendingSources--;
         status.setText(sources.size() == 0 ? "继续搜索播放源..." : "已找到 " + sources.size() + " 个播放源");
         if (pendingSources <= 0 && sources.size() == 0) {
-            status.setText("未找到播放源");
+            if (tlsFailures > 0) {
+                status.setText(LegacyHttpCompat.buildCompatMessage("片源加载"));
+            } else {
+                status.setText("未找到播放源");
+            }
         }
         renderSources();
     }

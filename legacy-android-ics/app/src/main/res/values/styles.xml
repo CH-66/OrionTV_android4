@@ -1,0 +1,12 @@
+<resources>
+    <style name="AppTheme" parent="@android:style/Theme.Holo.NoActionBar">
+        <item name="android:windowBackground">@color/orion_bg</item>
+    </style>
+
+    <style name="PlayerTheme" parent="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowBackground">#000000</item>
+    </style>
+</resources>

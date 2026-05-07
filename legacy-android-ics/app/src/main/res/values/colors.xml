@@ -1,0 +1,8 @@
+<resources>
+    <color name="orion_bg">#101214</color>
+    <color name="orion_panel">#1F2327</color>
+    <color name="orion_focus">#00BB5E</color>
+    <color name="orion_text">#F5F5F5</color>
+    <color name="orion_muted">#B8B8B8</color>
+    <color name="orion_error">#FF5A5F</color>
+</resources>

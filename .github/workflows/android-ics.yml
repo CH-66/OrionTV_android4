@@ -1,0 +1,111 @@
+name: Build Android 4.0.4 Legacy APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "APK build type"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+      publish_release:
+        description: "Create GitHub release after successful build"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build_android_ics:
+    name: Build Android 4.0.4 API 15 APK
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 for Android SDK tools
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install legacy Android SDK packages
+        run: |
+          yes | sdkmanager "platform-tools" "platforms;android-25" "build-tools;25.0.3"
+
+      - name: Set up JDK 8 for legacy Gradle build
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "8"
+
+      - name: Set up Gradle 3.3
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "3.3"
+
+      - name: Get version from package.json
+        id: package-version
+        run: echo "version=$(node -p 'require(\"./package.json\").version')" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure debug signing key exists
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Build legacy APK
+        run: |
+          if [ "${{ inputs.build_type }}" = "release" ]; then
+            gradle -p legacy-android-ics :app:assembleRelease
+          else
+            gradle -p legacy-android-ics :app:assembleDebug
+          fi
+
+      - name: Rename APK
+        run: |
+          mkdir -p artifacts
+          if [ "${{ inputs.build_type }}" = "release" ]; then
+            cp legacy-android-ics/app/build/outputs/apk/app-release.apk artifacts/orionTV.${{ steps.package-version.outputs.version }}-android-ics-release.apk
+          else
+            cp legacy-android-ics/app/build/outputs/apk/app-debug.apk artifacts/orionTV.${{ steps.package-version.outputs.version }}-android-ics-debug.apk
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: orionTV-${{ steps.package-version.outputs.version }}-android-ics-${{ inputs.build_type }}
+          path: artifacts/*.apk
+
+      - name: Create Release and Upload APK
+        if: ${{ inputs.publish_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.package-version.outputs.version }}-android-ics
+          name: Release v${{ steps.package-version.outputs.version }} (Android 4.0.4)
+          body: |
+            Android 4.0.4 / API 15 legacy native client.
+
+            This APK is built from `legacy-android-ics/` and is separate from the Expo/React Native Android 5+ app.
+          draft: false
+          prerelease: true
+          files: artifacts/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

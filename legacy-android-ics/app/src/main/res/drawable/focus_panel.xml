@@ -1,0 +1,16 @@
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#27302B" />
+            <stroke android:width="3dp" android:color="@color/orion_focus" />
+            <corners android:radius="4dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/orion_panel" />
+            <stroke android:width="1dp" android:color="#333A40" />
+            <corners android:radius="4dp" />
+        </shape>
+    </item>
+</selector>

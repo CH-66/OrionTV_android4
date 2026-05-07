@@ -1,0 +1,44 @@
+apply plugin: 'com.android.application'
+
+android {
+    compileSdkVersion 25
+    buildToolsVersion '25.0.3'
+
+    defaultConfig {
+        applicationId 'com.oriontv.legacy'
+        minSdkVersion 15
+        targetSdkVersion 19
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    signingConfigs {
+        release {
+            storeFile file(System.getenv('ORIONTV_LEGACY_KEYSTORE') ?: "${System.properties['user.home']}/.android/debug.keystore")
+            storePassword System.getenv('ORIONTV_LEGACY_KEYSTORE_PASSWORD') ?: 'android'
+            keyAlias System.getenv('ORIONTV_LEGACY_KEY_ALIAS') ?: 'androiddebugkey'
+            keyPassword System.getenv('ORIONTV_LEGACY_KEY_PASSWORD') ?: 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+        }
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+}
+
+dependencies {
+    compile 'com.squareup.okhttp3:okhttp:3.12.13'
+    compile 'com.google.code.gson:gson:2.8.9'
+    compile 'com.squareup.picasso:picasso:2.5.2'
+}

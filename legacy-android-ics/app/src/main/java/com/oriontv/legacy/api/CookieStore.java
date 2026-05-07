@@ -15,11 +15,20 @@ public class CookieStore {
 
     public void saveFromHeader(String setCookie) {
         if (setCookie != null && setCookie.length() > 0) {
-            preferencesStore.setAuthCookies(setCookie);
+            preferencesStore.setAuthCookies(toCookieHeader(setCookie));
         }
     }
 
     public void clear() {
         preferencesStore.setAuthCookies("");
+    }
+
+    private String toCookieHeader(String setCookie) {
+        String value = setCookie.trim();
+        int semicolon = value.indexOf(';');
+        if (semicolon >= 0) {
+            value = value.substring(0, semicolon).trim();
+        }
+        return value;
     }
 }

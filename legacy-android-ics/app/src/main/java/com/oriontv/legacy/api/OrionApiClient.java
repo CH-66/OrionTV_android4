@@ -20,6 +20,8 @@ import com.oriontv.legacy.data.PreferencesStore;
 
 import java.io.IOException;
 import java.lang.reflect.Type;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URLEncoder;
 import java.util.List;
 import java.util.Map;
@@ -68,6 +70,16 @@ public class OrionApiClient {
         }
         if (value.length() == 0) return "";
         if (value.startsWith("http://") || value.startsWith("https://")) {
+            try {
+                URI uri = new URI(value);
+                if (uri.getScheme() != null && uri.getHost() != null) {
+                    StringBuilder normalized = new StringBuilder();
+                    normalized.append(uri.getScheme()).append("://").append(uri.getAuthority());
+                    return normalized.toString();
+                }
+            } catch (URISyntaxException ignored) {
+                return value;
+            }
             return value;
         }
         String host = value;
@@ -76,9 +88,9 @@ public class OrionApiClient {
             host = host.substring(0, slash);
         }
         if (host.matches("([0-9]{1,3}\\.){3}[0-9]{1,3}(:[0-9]+)?") || host.indexOf(':') >= 0) {
-            return "http://" + value;
+            return "http://" + host;
         }
-        return "https://" + value;
+        return "https://" + host;
     }
 
     public String imageProxyUrl(String imageUrl) {

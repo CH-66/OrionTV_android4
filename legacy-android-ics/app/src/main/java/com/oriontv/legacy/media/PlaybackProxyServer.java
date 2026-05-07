@@ -16,7 +16,9 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.net.URI;
 import java.net.URLDecoder;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -151,11 +153,9 @@ public class PlaybackProxyServer implements Closeable {
             boolean playlist = isPlaylist(upstreamUrl, contentType);
             if (playlist && !headRequest) {
                 String body = response.body().string();
-                String rewritten = rewritePlaylist(upstreamUrl, body);
-                byte[] bytes = rewritten.getBytes("UTF-8");
-                Log.d(TAG, "Playlist relay " + upstreamUrl + " bytes=" + bytes.length);
-                sendHeaders(output, 200, statusText(200), "application/vnd.apple.mpegurl", bytes.length, null, null, false);
-                output.write(bytes);
+                Log.d(TAG, "Playlist flatten " + upstreamUrl + " bytes=" + body.length());
+                sendHeaders(output, 200, statusText(200), "video/mp2t", -1, null, null, false);
+                streamPlaylist(upstreamUrl, body, output, 0);
                 output.flush();
                 return;
             }
@@ -236,40 +236,82 @@ public class PlaybackProxyServer implements Closeable {
         return lowerUrl.contains(".m3u8") || lowerType.contains("mpegurl") || lowerType.contains("vnd.apple.mpegurl");
     }
 
-    private String rewritePlaylist(String upstreamUrl, String body) {
-        String[] lines = body.replace("\r", "").split("\n");
-        StringBuilder rewritten = new StringBuilder();
-        for (int i = 0; i < lines.length; i++) {
-            String line = lines[i];
-            if (line.startsWith("#")) {
-                rewritten.append(rewriteTagUris(upstreamUrl, line));
-            } else if (line.trim().length() > 0) {
-                rewritten.append(proxyUrl(resolve(upstreamUrl, line.trim())));
-            }
-            if (i < lines.length - 1) {
-                rewritten.append('\n');
-            }
+    private void streamPlaylist(String playlistUrl, String body, OutputStream output, int depth) throws IOException {
+        if (depth > 3) {
+            throw new IOException("Playlist nesting too deep");
         }
-        return rewritten.toString();
+        PlaylistParts parts = parsePlaylist(playlistUrl, body);
+        if (parts.masterPlaylistUrl != null) {
+            Log.d(TAG, "Follow master playlist " + playlistUrl + " -> " + parts.masterPlaylistUrl);
+            String nestedBody = fetchText(parts.masterPlaylistUrl);
+            streamPlaylist(parts.masterPlaylistUrl, nestedBody, output, depth + 1);
+            return;
+        }
+        Log.d(TAG, "Stream TS segments count=" + parts.segments.size() + " playlist=" + playlistUrl);
+        for (int i = 0; i < parts.segments.size(); i++) {
+            String segment = parts.segments.get(i);
+            Log.d(TAG, "Segment " + (i + 1) + "/" + parts.segments.size() + " " + segment);
+            streamSegment(segment, output);
+        }
     }
 
-    private String rewriteTagUris(String baseUrl, String line) {
-        String rewritten = line;
-        int cursor = 0;
-        while (true) {
-            int start = rewritten.indexOf("URI=\"", cursor);
-            if (start < 0) {
-                return rewritten;
+    private PlaylistParts parsePlaylist(String playlistUrl, String body) {
+        PlaylistParts parts = new PlaylistParts();
+        String[] lines = body.replace("\r", "").split("\n");
+        boolean nextIsVariant = false;
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i] == null ? "" : lines[i].trim();
+            if (line.length() == 0) {
+                continue;
             }
-            int valueStart = start + 5;
-            int valueEnd = rewritten.indexOf('"', valueStart);
-            if (valueEnd < 0) {
-                return rewritten;
+            if (line.startsWith("#EXT-X-STREAM-INF")) {
+                nextIsVariant = true;
+                continue;
             }
-            String original = rewritten.substring(valueStart, valueEnd);
-            String resolved = proxyUrl(resolve(baseUrl, original));
-            rewritten = rewritten.substring(0, valueStart) + resolved + rewritten.substring(valueEnd);
-            cursor = valueStart + resolved.length();
+            if (line.startsWith("#")) {
+                continue;
+            }
+            String resolved = resolve(playlistUrl, line);
+            if (nextIsVariant && parts.masterPlaylistUrl == null) {
+                parts.masterPlaylistUrl = resolved;
+                nextIsVariant = false;
+                continue;
+            }
+            nextIsVariant = false;
+            parts.segments.add(resolved);
+        }
+        return parts;
+    }
+
+    private String fetchText(String url) throws IOException {
+        Response response = null;
+        try {
+            response = client.newCall(new Request.Builder().url(url).build()).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("Playlist fetch failed " + response.code());
+            }
+            return response.body().string();
+        } finally {
+            if (response != null) response.close();
+        }
+    }
+
+    private void streamSegment(String url, OutputStream output) throws IOException {
+        Response response = null;
+        try {
+            response = client.newCall(new Request.Builder().url(url).build()).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("Segment fetch failed " + response.code() + " " + url);
+            }
+            InputStream input = response.body().byteStream();
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+            }
+            output.flush();
+        } finally {
+            if (response != null) response.close();
         }
     }
 
@@ -386,6 +428,11 @@ public class PlaybackProxyServer implements Closeable {
             default:
                 return "OK";
         }
+    }
+
+    private static class PlaylistParts {
+        String masterPlaylistUrl;
+        List<String> segments = new ArrayList<String>();
     }
 
     @Override

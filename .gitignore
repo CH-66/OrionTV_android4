@@ -29,3 +29,4 @@ coverage/
 legacy-android-ics/.gradle/
 legacy-android-ics/build/
 legacy-android-ics/app/build/
+.codex/*.log

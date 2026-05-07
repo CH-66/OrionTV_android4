@@ -7,6 +7,6 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowActionBar">false</item>
-        <item name="android:windowBackground">#000000</item>
+        <item name="android:windowBackground">@color/orion_black</item>
     </style>
 </resources>

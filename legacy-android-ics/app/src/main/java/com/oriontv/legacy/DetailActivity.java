@@ -5,6 +5,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.KeyEvent;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -25,7 +26,6 @@ import com.oriontv.legacy.api.models.SearchResult;
 import com.oriontv.legacy.data.LocalRepository;
 import com.oriontv.legacy.media.M3u8Inspector;
 import com.oriontv.legacy.ui.Ui;
-import com.squareup.picasso.Picasso;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -94,12 +94,31 @@ public class DetailActivity extends BaseActivity {
         episodeGrid.setNumColumns(6);
         episodeGrid.setHorizontalSpacing(Ui.dp(this, 8));
         episodeGrid.setVerticalSpacing(Ui.dp(this, 8));
+        episodeGrid.setFocusable(true);
+        episodeGrid.setFocusableInTouchMode(false);
+        episodeGrid.setChoiceMode(GridView.CHOICE_MODE_SINGLE);
+        episodeGrid.setDrawSelectorOnTop(true);
         episodeAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, new ArrayList<String>());
         episodeGrid.setAdapter(episodeAdapter);
         episodeGrid.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 openPlayer(position);
+            }
+        });
+        episodeGrid.setOnKeyListener(new View.OnKeyListener() {
+            @Override
+            public boolean onKey(View v, int keyCode, android.view.KeyEvent event) {
+                if (event.getAction() == KeyEvent.ACTION_UP
+                        && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                        || keyCode == KeyEvent.KEYCODE_ENTER)) {
+                    int position = episodeGrid.getSelectedItemPosition();
+                    if (position >= 0 && position < episodeAdapter.getCount()) {
+                        openPlayer(position);
+                        return true;
+                    }
+                }
+                return false;
             }
         });
         root.addView(episodeGrid, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 360)));
@@ -233,7 +252,9 @@ public class DetailActivity extends BaseActivity {
         selected = source;
         titleView.setText(source.title);
         if (source.poster != null && source.poster.length() > 0) {
-            Picasso.with(this).load(app.api().imageProxyUrl(source.poster)).resize(Ui.dp(this, 180), Ui.dp(this, 240)).centerCrop().into(posterView);
+            app.api().loadImage(app.api().imageProxyUrl(source.poster), posterView, R.drawable.poster_placeholder);
+        } else {
+            posterView.setImageResource(R.drawable.poster_placeholder);
         }
         episodeAdapter.clear();
         if (source.episodes != null) {

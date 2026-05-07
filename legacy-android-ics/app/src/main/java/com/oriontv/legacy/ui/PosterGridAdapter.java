@@ -12,7 +12,6 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.oriontv.legacy.R;
-import com.squareup.picasso.Picasso;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -59,14 +58,13 @@ public class PosterGridAdapter extends BaseAdapter {
             LinearLayout root = new LinearLayout(activity);
             root.setOrientation(LinearLayout.VERTICAL);
             root.setGravity(Gravity.CENTER_HORIZONTAL);
-            root.setFocusable(true);
-            root.setFocusableInTouchMode(true);
             root.setBackgroundResource(R.drawable.focus_panel);
             root.setPadding(Ui.dp(activity, 6), Ui.dp(activity, 6), Ui.dp(activity, 6), Ui.dp(activity, 6));
             root.setLayoutParams(new AbsListView.LayoutParams(Ui.dp(activity, 150), Ui.dp(activity, 245)));
 
             ImageView image = new ImageView(activity);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            image.setImageResource(R.drawable.poster_placeholder);
             root.addView(image, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(activity, 190)));
 
             TextView title = new TextView(activity);
@@ -94,13 +92,17 @@ public class PosterGridAdapter extends BaseAdapter {
         PosterItem item = items.get(position);
         holder.title.setText(item.title == null ? "" : item.title);
         holder.subtitle.setText(item.subtitle == null ? "" : item.subtitle);
-        holder.image.setImageDrawable(null);
+        holder.image.setImageResource(R.drawable.poster_placeholder);
+        boolean activated = false;
+        if (parent instanceof AbsListView) {
+            AbsListView listView = (AbsListView) parent;
+            activated = listView.isItemChecked(position) || position == listView.getSelectedItemPosition();
+        }
+        convertView.setActivated(activated);
+        convertView.setSelected(activated);
         if (item.poster != null && item.poster.length() > 0) {
-            Picasso.with(activity)
-                    .load(item.poster)
-                    .resize(Ui.dp(activity, 150), Ui.dp(activity, 190))
-                    .centerCrop()
-                    .into(holder.image);
+            activity.getApplicationContext();
+            com.oriontv.legacy.App.get().api().loadImage(item.poster, holder.image, R.drawable.poster_placeholder);
         }
         return convertView;
     }

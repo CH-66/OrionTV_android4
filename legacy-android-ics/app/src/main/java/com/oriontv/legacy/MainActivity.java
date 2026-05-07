@@ -3,6 +3,7 @@ package com.oriontv.legacy;
 import android.content.Intent;
 import android.os.Bundle;
 import android.view.View;
+import android.view.KeyEvent;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.Button;
@@ -104,12 +105,44 @@ public class MainActivity extends BaseActivity {
         grid.setVerticalSpacing(Ui.dp(this, 12));
         grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
         grid.setFocusable(true);
+        grid.setFocusableInTouchMode(false);
+        grid.setChoiceMode(GridView.CHOICE_MODE_SINGLE);
+        grid.setDrawSelectorOnTop(true);
         adapter = new PosterGridAdapter(this);
         grid.setAdapter(adapter);
         grid.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 open(adapter.getPosterItem(position));
+            }
+        });
+        grid.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                parent.setItemChecked(position, true);
+                if (view != null) {
+                    view.setActivated(true);
+                    view.setSelected(true);
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+        grid.setOnKeyListener(new View.OnKeyListener() {
+            @Override
+            public boolean onKey(View v, int keyCode, android.view.KeyEvent event) {
+                if (event.getAction() == KeyEvent.ACTION_UP
+                        && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                        || keyCode == KeyEvent.KEYCODE_ENTER)) {
+                    int position = grid.getSelectedItemPosition();
+                    if (position >= 0 && position < adapter.getCount()) {
+                        open(adapter.getPosterItem(position));
+                        return true;
+                    }
+                }
+                return false;
             }
         });
         root.addView(grid, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));

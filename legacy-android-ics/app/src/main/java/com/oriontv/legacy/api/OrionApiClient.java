@@ -1,8 +1,11 @@
 package com.oriontv.legacy.api;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.os.Handler;
 import android.os.Looper;
+import android.widget.ImageView;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -19,6 +22,7 @@ import com.oriontv.legacy.api.models.VideoDetail;
 import com.oriontv.legacy.data.PreferencesStore;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Type;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -95,6 +99,58 @@ public class OrionApiClient {
 
     public String imageProxyUrl(String imageUrl) {
         return getBaseUrl() + "/api/image-proxy?url=" + enc(imageUrl);
+    }
+
+    public void loadImage(final String url, final ImageView target, final int placeholderResId) {
+        if (target == null) return;
+        if (url == null || url.length() == 0) {
+            target.setImageResource(placeholderResId);
+            return;
+        }
+        target.setTag(url);
+        target.setImageResource(placeholderResId);
+
+        Request.Builder builder = new Request.Builder().url(url);
+        String cookies = cookieStore.getCookieHeader();
+        if (cookies != null && cookies.length() > 0) {
+            builder.header("Cookie", cookies);
+        }
+
+        client.newCall(builder.build()).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                if (response == null || !response.isSuccessful() || response.body() == null) {
+                    if (response != null) response.close();
+                    return;
+                }
+                InputStream stream = null;
+                try {
+                    stream = response.body().byteStream();
+                    final Bitmap bitmap = BitmapFactory.decodeStream(stream);
+                    if (bitmap == null) {
+                        return;
+                    }
+                    main.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            Object tag = target.getTag();
+                            if (tag != null && url.equals(tag.toString())) {
+                                target.setImageBitmap(bitmap);
+                            }
+                        }
+                    });
+                } finally {
+                    if (stream != null) {
+                        stream.close();
+                    }
+                    response.close();
+                }
+            }
+        });
     }
 
     public void login(String username, String password, ApiCallback<LoginResult> callback) {
@@ -249,8 +305,12 @@ public class OrionApiClient {
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
-                String setCookie = response.header("Set-Cookie");
-                cookieStore.saveFromHeader(setCookie);
+                List<String> setCookies = response.headers("Set-Cookie");
+                if (setCookies != null) {
+                    for (int i = 0; i < setCookies.size(); i++) {
+                        cookieStore.saveFromHeader(setCookies.get(i));
+                    }
+                }
 
                 String text = response.body() == null ? "" : response.body().string();
                 if (response.code() == 401) {

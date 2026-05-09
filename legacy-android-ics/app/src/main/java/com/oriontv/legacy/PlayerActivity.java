@@ -76,6 +76,22 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             sources = new ArrayList<SearchResult>();
         }
         if (sources == null) sources = new ArrayList<SearchResult>();
+        if (sources.size() == 0) {
+            String playUrl = getIntent().getStringExtra("play_url");
+            if (playUrl != null && playUrl.length() > 0) {
+                SearchResult direct = new SearchResult();
+                direct.id = "direct";
+                direct.source = "direct";
+                direct.source_name = "Direct";
+                direct.title = getIntent().getStringExtra("title");
+                if (direct.title == null || direct.title.length() == 0) {
+                    direct.title = "Direct";
+                }
+                direct.poster = "";
+                direct.episodes.add(playUrl);
+                sources.add(direct);
+            }
+        }
         String source = getIntent().getStringExtra("source");
         for (int i = 0; i < sources.size(); i++) {
             SearchResult item = sources.get(i);

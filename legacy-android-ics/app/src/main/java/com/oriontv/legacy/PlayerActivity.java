@@ -17,7 +17,6 @@ import com.oriontv.legacy.api.models.PlayRecord;
 import com.oriontv.legacy.api.models.SearchResult;
 import com.oriontv.legacy.data.LocalRepository;
 import com.oriontv.legacy.media.LegacyPlayerController;
-import com.oriontv.legacy.media.PlaybackProxyServer;
 import com.oriontv.legacy.media.PlaybackSourceSelector;
 import com.oriontv.legacy.net.LegacyHttpCompat;
 import com.oriontv.legacy.ui.Ui;
@@ -142,32 +141,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         String originalUrl = currentSource.episodes.get(episodeIndex);
         title.setText(currentSource.title + " / " + currentSource.source_name + " / 第" + (episodeIndex + 1) + "集");
         showOverlay("正在加载第" + (episodeIndex + 1) + "集");
-        if (app.playbackProxy().cacheHlsToFile(this, originalUrl, new PlaybackProxyServer.CacheCallback() {
-            @Override
-            public void onReady(final String filePath) {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        controller.load(filePath);
-                    }
-                });
-            }
-
-            @Override
-            public void onError(final Exception error) {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        onError(error == null ? "HLS cache failed" : error.getMessage());
-                    }
-                });
-            }
-        })) {
-            showOverlay("正在缓存 HLS");
-        } else {
-            String playbackUrl = app.playbackProxy().proxyUrl(originalUrl);
-            controller.load(playbackUrl);
-        }
+        controller.load(originalUrl);
     }
 
     private void showOverlay(String text) {

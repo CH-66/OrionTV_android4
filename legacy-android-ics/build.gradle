@@ -1,6 +1,7 @@
 buildscript {
     repositories {
         maven { url 'https://dl.google.com/dl/android/maven2/' }
+        maven { url 'https://maven.aliyun.com/repository/jcenter' }
         mavenCentral()
         jcenter()
     }
@@ -12,6 +13,7 @@ buildscript {
 allprojects {
     repositories {
         maven { url 'https://dl.google.com/dl/android/maven2/' }
+        maven { url 'https://maven.aliyun.com/repository/jcenter' }
         mavenCentral()
         jcenter()
     }

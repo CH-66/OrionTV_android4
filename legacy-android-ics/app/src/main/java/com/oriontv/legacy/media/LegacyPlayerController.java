@@ -148,7 +148,11 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         });
 
         try {
-            mediaPlayer.setDataSource(context, Uri.parse(url));
+            if (url != null && url.startsWith("/")) {
+                mediaPlayer.setDataSource(url);
+            } else {
+                mediaPlayer.setDataSource(context, Uri.parse(url));
+            }
             mediaPlayer.prepareAsync();
         } catch (IOException e) {
             Log.e(TAG, "setDataSource IOException " + url, e);

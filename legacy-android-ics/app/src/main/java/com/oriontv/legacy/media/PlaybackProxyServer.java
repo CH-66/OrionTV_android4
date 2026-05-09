@@ -1,6 +1,7 @@
 package com.oriontv.legacy.media;
 
 import android.os.ParcelFileDescriptor;
+import android.content.Context;
 import android.util.Log;
 
 import com.oriontv.legacy.net.LegacyHttpCompat;
@@ -8,6 +9,8 @@ import com.oriontv.legacy.net.LegacyHttpCompat;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -57,6 +60,11 @@ public class PlaybackProxyServer implements Closeable {
                 readFd.close();
             }
         }
+    }
+
+    public interface CacheCallback {
+        void onReady(String filePath);
+        void onError(Exception error);
     }
 
     public synchronized void ensureStarted() throws IOException {
@@ -128,6 +136,42 @@ public class PlaybackProxyServer implements Closeable {
             Log.w(TAG, "Failed to open HLS pipe for " + originalUrl, e);
             return null;
         }
+    }
+
+    public boolean cacheHlsToFile(final Context context, final String originalUrl, final CacheCallback callback) {
+        if (!looksLikePlaylist(originalUrl)) {
+            return false;
+        }
+        executor.execute(new Runnable() {
+            @Override
+            public void run() {
+                FileOutputStream output = null;
+                try {
+                    File dir = new File(context.getCacheDir(), "playback");
+                    if (!dir.exists() && !dir.mkdirs()) {
+                        throw new IOException("Cannot create playback cache");
+                    }
+                    File file = new File(dir, "hls-" + Integer.toHexString(originalUrl.hashCode()) + ".ts");
+                    output = new FileOutputStream(file, false);
+                    String body = fetchText(originalUrl);
+                    Log.d(TAG, "Cache HLS playlist " + originalUrl + " bytes=" + body.length() + " file=" + file.getAbsolutePath());
+                    streamPlaylist(originalUrl, body, output, 0);
+                    output.flush();
+                    callback.onReady(file.getAbsolutePath());
+                } catch (Exception e) {
+                    Log.e(TAG, "Cache HLS failed " + originalUrl, e);
+                    callback.onError(e);
+                } finally {
+                    if (output != null) {
+                        try {
+                            output.close();
+                        } catch (IOException ignored) {
+                        }
+                    }
+                }
+            }
+        });
+        return true;
     }
 
     private void acceptLoop() {

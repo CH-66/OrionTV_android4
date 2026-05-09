@@ -2,149 +2,173 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+# Repository Guidelines
 
-OrionTV is a React Native TVOS application for streaming video content, built with Expo and designed specifically for TV platforms (Apple TV and Android TV). This is a frontend-only application that connects to external APIs and includes a built-in remote control server for external device control.
+## 项目范围
 
-## Key Commands
+本仓库当前只关注独立的 Android 4.0.4 原生旧版客户端：
 
-### Development Commands
+- 目标模块：`legacy-android-ics/`
+- 包名：`com.oriontv.legacy`
+- 目标系统：Android 4.0.4 / API 15
 
-#### TV Development (Apple TV & Android TV)
-- `yarn start` - Start Metro bundler in TV mode (EXPO_TV=1)
-- `yarn android` - Build and run on Android TV
-- `yarn ios` - Build and run on Apple TV
-- `yarn prebuild` - Generate native project files for TV (run after dependency changes)
-- `yarn build` - Build Android APK for TV release
+除非用户明确要求，不处理 Expo / React Native 目录中的新版本客户端。
 
-#### Testing Commands
-- `yarn test` - Run Jest tests with watch mode
-- `yarn test-ci` - Run Jest tests for CI with coverage
-- `yarn test utils` - Run tests for specific directory/file pattern
-- `yarn lint` - Run ESLint checks
-- `yarn typecheck` - Run TypeScript type checking
+## 项目结构
 
-#### Build and Deployment
-- `yarn copy-config` - Copy TV-specific Android configurations
-- `yarn build-debug` - Build Android APK for debugging
-- `yarn clean` - Clean cache and build artifacts
-- `yarn clean-modules` - Reinstall all node modules
+- `legacy-android-ics/`：Android 4.0.4 / API 15 Java 原生客户端。
+- `.github/workflows/android-ics.yml`：旧安卓 APK 构建 workflow，名称为 `Build Android 4.0.4 Legacy APK`。
+- `.codex/skills/legacy-android-ics-smoke/`：旧安卓构建、安装、模拟器冒烟测试规范 skill。
+- `docs/`、`.codex/`：说明文档、验证记录与任务留痕。
 
-## Architecture Overview
+## 本机 Android 4.0 测试环境
 
-### Multi-Platform Responsive Design
+统一使用英文路径：
 
-OrionTV implements a sophisticated responsive architecture supporting multiple device types:
-- **Device Detection**: Width-based breakpoints (mobile <768px, tablet 768-1023px, TV ≥1024px)
-- **Component Variants**: Platform-specific files with `.tv.tsx`, `.mobile.tsx`, `.tablet.tsx` extensions
-- **Responsive Utilities**: `DeviceUtils` and `ResponsiveStyles` for adaptive layouts and scaling
-- **Adaptive Navigation**: Different interaction patterns per device type (touch vs remote control)
+```text
+E:\android-4.0
+```
 
-### State Management Architecture (Zustand)
+目录约定：
 
-Domain-specific stores with consistent patterns:
-- **homeStore.ts** - Home screen content, categories, Douban API data, and play records
-- **playerStore.ts** - Video player state, controls, and episode management  
-- **settingsStore.ts** - App settings, API configuration, and user preferences
-- **remoteControlStore.ts** - Remote control server functionality and HTTP bridge
-- **authStore.ts** - User authentication state
-- **updateStore.ts** - Automatic update checking and version management
-- **favoritesStore.ts** - User favorites management
+- SDK：`E:\android-4.0\sdk`
+- AVD：`E:\android-4.0\avd`
+- APK 产物：`E:\android-4.0\apk`
+- 测试日志与截图：`E:\android-4.0\logs`
 
-### Service Layer Pattern
+旧路径 `E:\安卓4.0` 只作为历史遗留路径，不再写入新文档、脚本或命令。若 Windows 因 emulator/qemu 残留句柄无法立即重命名旧目录，可暂时保留 `E:\android-4.0` 到旧目录的 junction，但所有新流程必须只使用 `E:\android-4.0`。
 
-Clean separation of concerns across service modules:
-- **api.ts** - External API integration with error handling and caching
-- **storage.ts** - AsyncStorage wrapper with typed interfaces
-- **remoteControlService.ts** - TCP-based HTTP server for external device control
-- **updateService.ts** - Automatic version checking and APK download management
-- **tcpHttpServer.ts** - Low-level TCP server implementation
+## 必用 Skill
 
-### TV Remote Control System
+涉及以下任务时必须优先使用项目内 skill：
 
-Sophisticated TV interaction handling:
-- **useTVRemoteHandler** - Centralized hook for TV remote event processing
-- **Hardware Events** - HWEvent handling for TV-specific controls (play/pause, seek, menu)
-- **Focus Management** - TV-specific focus states and navigation flows
-- **Gesture Support** - Long press, directional seeking, auto-hide controls
+```text
+.codex/skills/legacy-android-ics-smoke/SKILL.md
+```
 
-## Key Technologies
+适用任务：
 
-- **React Native TVOS (0.74.x)** - TV-optimized React Native with TV-specific event handling
-- **Expo SDK 51** - Development platform providing native capabilities and build tooling
-- **TypeScript** - Complete type safety with `@/*` path mapping configuration
-- **Zustand** - Lightweight state management for global application state
-- **Expo Router** - File-based routing system with typed routes
-- **Expo AV** - Video playback with TV-optimized controls
+- 构建或下载 Android 4.0.4 APK
+- 安装 APK 到 API 15 模拟器
+- 执行旧安卓冒烟测试
+- 排查 Android 4.0.4 emulator / ADB / logcat / 截图问题
+- 汇总旧安卓测试证据
 
-## Development Workflow
+## Android 4.0.4 APK 构建流程
 
-### TV-First Development Pattern
+旧安卓客户端优先使用 GitHub Actions 构建 APK，不依赖本地 Gradle 环境。
 
-This project uses a TV-first approach with responsive adaptations:
-- **Primary Target**: Apple TV and Android TV with remote control interaction
-- **Secondary Targets**: Mobile and tablet with touch-optimized responsive design
-- **Build Environment**: `EXPO_TV=1` environment variable enables TV-specific features
-- **Component Strategy**: Shared components with platform-specific variants using file extensions
+1. 确认或触发 workflow：`Build Android 4.0.4 Legacy APK`。
+2. 构建成功后下载 artifact：
 
-### Testing Strategy
+```powershell
+gh run download <run-id> --dir "E:\android-4.0\apk\run-<run-id>"
+```
 
-- **Unit Tests**: Comprehensive test coverage for utilities (`utils/__tests__/`)
-- **Jest Configuration**: Expo preset with Babel transpilation
-- **Test Patterns**: Mock-based testing for React Native modules and external dependencies
-- **Coverage Reporting**: CI-compatible coverage reports with detailed metrics
+3. 默认安装 `*-android-ics-debug.apk`，除非用户明确要求 release。
 
-### Important Development Notes
+## Emulator 启动规范
 
-- Run `yarn prebuild` after adding new dependencies for native builds
-- Use `yarn copy-config` to apply TV-specific Android configurations
-- TV components require focus management and remote control support
-- Test on both TV devices (Apple TV/Android TV) and responsive mobile/tablet layouts
-- All API calls are centralized in `/services` directory with error handling
-- Storage operations use AsyncStorage wrapper in `storage.ts` with typed interfaces
+默认自动化用例优先使用：
 
-### Component Development Patterns
+- AVD：`android404_api15_nexus10`
+- 端口：优先 `5566`
+- serial：`emulator-5566`
 
-- **Platform Variants**: Use `.tv.tsx`, `.mobile.tsx`, `.tablet.tsx` for platform-specific implementations
-- **Responsive Utilities**: Leverage `DeviceUtils.getDeviceType()` for responsive logic
-- **TV Remote Handling**: Use `useTVRemoteHandler` hook for TV-specific interactions
-- **Focus Management**: TV components must handle focus states for remote navigation
-- **Shared Logic**: Place common logic in `/hooks` directory for reusability
+原因：`5554/5555` 容易被历史 offline 实例占用；如端口已占用，使用另一个未占用的偶数端口。
 
-## Common Development Tasks
+启动前设置：
 
-### Adding New Components
-1. Create base component in `/components` directory
-2. Add platform-specific variants (`.tv.tsx`) if needed
-3. Import and use responsive utilities from `@/utils/DeviceUtils`
-4. Test across device types for proper responsive behavior
+```powershell
+$env:ANDROID_SDK_ROOT='E:\android-4.0\sdk'
+$env:ANDROID_HOME='E:\android-4.0\sdk'
+$env:ANDROID_AVD_HOME='E:\android-4.0\avd'
+```
 
-### Working with State
-1. Identify appropriate Zustand store in `/stores` directory
-2. Follow existing patterns for actions and state structure
-3. Use TypeScript interfaces for type safety
-4. Consider cross-store dependencies and data flow
+若 qemu 报 `could not load PC BIOS 'bios-256k.bin'`，从以下英文工作目录启动 emulator：
 
-### API Integration
-1. Add new endpoints to `/services/api.ts`
-2. Implement proper error handling and loading states
-3. Use caching strategies for frequently accessed data
-4. Update relevant Zustand stores with API responses
+```text
+E:\android-4.0\sdk\emulator\qemu\windows-x86_64
+```
 
-## File Structure Notes
+## 固定冒烟用例
 
-- `/app` - Expo Router screens and navigation
-- `/components` - Reusable UI components (including `.tv.tsx` variants)
-- `/stores` - Zustand state management stores
-- `/services` - API, storage, remote control, and update services
-- `/hooks` - Custom React hooks including `useTVRemoteHandler`
-- `/constants` - App constants, theme definitions, and update configuration
-- `/assets` - Static assets including TV-specific icons and banners
+每次旧安卓冒烟至少执行以下用例，并保存证据：
 
-# important-instruction-reminders
+1. **安装 APK**
+   - `adb install -r <apk>`
+   - 验收：输出 `Success`，且 `pm path com.oriontv.legacy` 返回 APK 路径。
 
-Do what has been asked; nothing more, nothing less.
-NEVER create files unless they're absolutely necessary for achieving your goal.
-ALWAYS prefer editing an existing file to creating a new one.
-NEVER proactively create documentation files (\*.md) or README files. Only create documentation files if explicitly requested by the User.
-ALWAYS When plan mode switches to edit, the contents of plan and todo need to be output as a document.
+2. **启动应用**
+   - 清空 logcat，force-stop 后启动应用。
+   - 验收：当前焦点或 activity 栈包含 `com.oriontv.legacy/.MainActivity`。
+
+3. **服务配置加载**
+   - 检查 `shared_prefs/oriontv_legacy.xml`。
+   - 验收：存在 `mytv_settings`，且 `apiBaseUrl` 非空。
+
+4. **首页 DPAD 导航**
+   - 发送 DPAD 方向键。
+   - 验收：应用不崩溃、不 ANR，仍保持在应用 activity。
+
+5. **进入详情页**
+   - 在首页内容上发送 OK / Enter。
+   - 验收：activity 栈包含 `com.oriontv.legacy/.DetailActivity`。
+
+6. **尝试播放**
+   - 在详情页选择剧集或播放源并按 OK。
+   - 验收：activity 栈包含 `com.oriontv.legacy/.PlayerActivity`。
+   - 播放成功需单独确认；若仅进入播放器但 `MediaPlayer` 报错，记为“导航通过，播放失败或部分通过”。
+
+## 证据要求
+
+日志和截图保存到：
+
+```text
+E:\android-4.0\logs
+```
+
+推荐命名：
+
+- `run-<run-id>-smoke-<port>-main.png`
+- `run-<run-id>-smoke-<port>-final.png`
+- `run-<run-id>-smoke-<port>-final-logcat.txt`
+
+Android 4.0.4 可能不支持 `adb exec-out screencap`，应使用设备端截图后 pull：
+
+```powershell
+adb -s emulator-5566 shell screencap -p /sdcard/run-<run-id>-smoke-final.png
+adb -s emulator-5566 pull /sdcard/run-<run-id>-smoke-final.png "E:\android-4.0\logs\run-<run-id>-smoke-5566-final.png"
+```
+
+headless 截图可能全黑。若截图不可作为视觉证据，必须用 `dumpsys window`、`dumpsys activity activities` 和 logcat 作为验收依据，并在交付说明中明确说明。
+
+## 代码风格
+
+旧版 Android 代码位于 `com.oriontv.legacy` 包下。所有改动必须兼容 API 15，避免直接使用新 Android API，除非有明确兼容保护。
+
+## 测试要求
+
+旧安卓改动必须至少通过 GitHub Actions APK 构建，并下载最新产物到 `E:\android-4.0` 后完成模拟器冒烟。
+
+若本机模拟器因 offline 端口、qemu 残留句柄或 Windows 路径占用无法完成，必须说明：
+
+- 失败命令
+- 失败现象
+- 已保存的日志路径
+- 下一步恢复方式，例如重启 Windows 后清理旧 emulator 句柄
+
+## 提交与 PR 规范
+
+提交信息使用简短祈使句，可使用 conventional 前缀。示例：
+
+- `fix: harden legacy API URL and cookie handling`
+- `Fix legacy poster loading and DPAD focus`
+
+PR 需说明变更范围、测试结果、相关 workflow run 链接；涉及 UI 时附截图；涉及旧安卓时明确影响的 Android 版本。
+
+## 安全与配置
+
+不要提交账号密码、签名文件、下载的 APK、模拟器数据、截图、logcat 或本地 IDE 文件。
+
+`E:\android-4.0` 仅作为本机测试目录，不应纳入仓库。

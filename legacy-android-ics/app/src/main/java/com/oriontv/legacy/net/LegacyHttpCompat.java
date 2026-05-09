@@ -8,12 +8,16 @@ import java.security.KeyStore;
 import java.security.Provider;
 import java.security.SecureRandom;
 import java.security.Security;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSession;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
@@ -44,6 +48,45 @@ public final class LegacyHttpCompat {
         return newBuilder().build();
     }
 
+    public static OkHttpClient.Builder newUnsafeMediaBuilder() {
+        OkHttpClient.Builder builder = new OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(20, TimeUnit.SECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true);
+        try {
+            installConscrypt();
+            final X509TrustManager trustAll = new X509TrustManager() {
+                @Override
+                public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+                }
+
+                @Override
+                public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+                }
+
+                @Override
+                public X509Certificate[] getAcceptedIssuers() {
+                    return new X509Certificate[0];
+                }
+            };
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, new TrustManager[]{trustAll}, new SecureRandom());
+            builder.sslSocketFactory(new Tls12SocketFactory(sslContext.getSocketFactory()), trustAll);
+            builder.hostnameVerifier(new HostnameVerifier() {
+                @Override
+                public boolean verify(String hostname, SSLSession session) {
+                    return true;
+                }
+            });
+            builder.connectionSpecs(legacyConnectionSpecs());
+        } catch (Exception error) {
+            Log.w(TAG, "Failed to install unsafe media TLS", error);
+        }
+        return builder;
+    }
+
     private static void enableLegacyTls(OkHttpClient.Builder builder) {
         if (Build.VERSION.SDK_INT > Build.VERSION_CODES.JELLY_BEAN_MR1) {
             return;
@@ -60,15 +103,18 @@ public final class LegacyHttpCompat {
             SSLContext sslContext = SSLContext.getInstance("TLS");
             sslContext.init(null, new TrustManager[]{trustManager}, new SecureRandom());
             builder.sslSocketFactory(new Tls12SocketFactory(sslContext.getSocketFactory()), trustManager);
-            ConnectionSpec compatibleTls = new ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
-                    .tlsVersions(TlsVersion.TLS_1_2, TlsVersion.TLS_1_1, TlsVersion.TLS_1_0)
-                    .allEnabledCipherSuites()
-                    .build();
-            List<ConnectionSpec> specs = Arrays.asList(compatibleTls, ConnectionSpec.COMPATIBLE_TLS, ConnectionSpec.CLEARTEXT);
-            builder.connectionSpecs(specs);
+            builder.connectionSpecs(legacyConnectionSpecs());
         } catch (Exception ignored) {
             builder.connectionSpecs(Collections.singletonList(ConnectionSpec.CLEARTEXT));
         }
+    }
+
+    private static List<ConnectionSpec> legacyConnectionSpecs() {
+        ConnectionSpec compatibleTls = new ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
+                .tlsVersions(TlsVersion.TLS_1_2, TlsVersion.TLS_1_1, TlsVersion.TLS_1_0)
+                .allEnabledCipherSuites()
+                .build();
+        return Arrays.asList(compatibleTls, ConnectionSpec.COMPATIBLE_TLS, ConnectionSpec.CLEARTEXT);
     }
 
     private static synchronized void installConscrypt() {

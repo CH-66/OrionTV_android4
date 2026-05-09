@@ -38,7 +38,7 @@ public class PlaybackProxyServer implements Closeable {
     private static final String TAG = "PlaybackProxy";
     private static final int MAX_MAPPED_URLS = 128;
     private static final Pattern URI_ATTRIBUTE = Pattern.compile("URI=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
-    private final OkHttpClient client = LegacyHttpCompat.newBuilder()
+    private final OkHttpClient client = LegacyHttpCompat.newUnsafeMediaBuilder()
             .readTimeout(30, TimeUnit.SECONDS)
             .build();
     private final ExecutorService executor = Executors.newCachedThreadPool();
@@ -210,10 +210,11 @@ public class PlaybackProxyServer implements Closeable {
                 return;
             }
             String method = parts[0];
-            String path = parts[1];
+            String path = normalizeRequestPath(parts[1]);
             Map<String, String> headers = readHeaders(input);
             String upstream = resolveUpstream(path);
             if (upstream == null || upstream.length() == 0) {
+                Log.w(TAG, "Missing upstream for " + method + " " + path);
                 sendError(output, 400, "Missing url");
                 return;
             }
@@ -516,11 +517,33 @@ public class PlaybackProxyServer implements Closeable {
     }
 
     private String resolveUpstream(String path) throws Exception {
+        path = normalizeRequestPath(path);
         String mapped = extractMappedUrl(path);
         if (mapped != null && mapped.length() > 0) {
             return mapped;
         }
         return extractUrl(path);
+    }
+
+    private String normalizeRequestPath(String path) {
+        if (path == null) {
+            return null;
+        }
+        String lower = path.toLowerCase(Locale.US);
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+            return path;
+        }
+        try {
+            URI uri = URI.create(path);
+            String rawPath = uri.getRawPath();
+            String rawQuery = uri.getRawQuery();
+            if (rawPath == null || rawPath.length() == 0) {
+                rawPath = "/";
+            }
+            return rawQuery == null || rawQuery.length() == 0 ? rawPath : rawPath + "?" + rawQuery;
+        } catch (RuntimeException ignored) {
+            return path;
+        }
     }
 
     private String extractMappedUrl(String path) {

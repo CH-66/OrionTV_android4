@@ -13,6 +13,7 @@ import tv.danmaku.ijk.media.player.IjkMediaPlayer;
 
 public class LegacyPlayerController implements SurfaceHolder.Callback {
     private static final String TAG = "LegacyPlayer";
+    private static final int SDL_FCC_I420 = 0x30323449;
 
     public interface Listener {
         void onPrepared(int durationMs);
@@ -110,9 +111,15 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         Log.d(TAG, "prepare ijk " + url);
         mediaPlayer = new IjkMediaPlayer();
         mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+        mediaPlayer.setVolume(1.0f, 1.0f);
         mediaPlayer.setDisplay(surfaceView.getHolder());
         mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", 0);
-        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "opensles", 0);
+        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-hevc", 0);
+        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "opensles", 1);
+        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "overlay-format", SDL_FCC_I420);
+        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 1);
+        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 1);
+        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared", 1);
         mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_clear", 1);
         mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "reconnect", 1);
         mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "timeout", 15000000);

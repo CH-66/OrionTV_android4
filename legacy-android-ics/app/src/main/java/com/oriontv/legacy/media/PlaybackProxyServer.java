@@ -17,6 +17,7 @@ import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.util.ArrayList;
@@ -220,6 +221,10 @@ public class PlaybackProxyServer implements Closeable {
             }
             Log.d(TAG, "Incoming " + method + " " + path + " -> " + upstream + " range=" + headers.get("range"));
             relay(method, upstream, headers, output);
+        } catch (SocketException e) {
+            Log.d(TAG, "Relay client disconnected: " + e.getMessage());
+        } catch (SocketTimeoutException e) {
+            Log.d(TAG, "Relay client timed out: " + e.getMessage());
         } catch (Exception e) {
             Log.e(TAG, "Relay request failed", e);
         } finally {

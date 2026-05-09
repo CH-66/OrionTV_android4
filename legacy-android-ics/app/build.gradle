@@ -41,8 +41,7 @@ dependencies {
     compile 'com.squareup.okhttp3:okhttp:3.12.13'
     compile 'com.google.code.gson:gson:2.8.5'
     compile 'com.squareup.picasso:picasso:2.5.2'
-    compile 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
-    compile 'tv.danmaku.ijk.media:ijkplayer-armv5:0.8.8'
-    compile 'tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8'
-    compile 'tv.danmaku.ijk.media:ijkplayer-x86:0.8.8'
+    compile 'com.mcxiaoke.ijk.media:ijkplayer-java:0.6.2'
+    compile 'com.mcxiaoke.ijk.media:ijkplayer-armv7a:0.6.2'
+    compile 'com.mcxiaoke.ijk.media:ijkplayer-x86:0.6.2'
 }

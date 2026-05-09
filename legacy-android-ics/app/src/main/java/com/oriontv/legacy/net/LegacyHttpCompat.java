@@ -1,9 +1,13 @@
 package com.oriontv.legacy.net;
 
 import android.os.Build;
+import android.util.Log;
 
+import java.lang.reflect.Method;
 import java.security.KeyStore;
+import java.security.Provider;
 import java.security.SecureRandom;
+import java.security.Security;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -19,6 +23,9 @@ import okhttp3.OkHttpClient;
 import okhttp3.TlsVersion;
 
 public final class LegacyHttpCompat {
+    private static final String TAG = "LegacyHttpCompat";
+    private static volatile boolean conscryptChecked;
+
     private LegacyHttpCompat() {
     }
 
@@ -42,6 +49,7 @@ public final class LegacyHttpCompat {
             return;
         }
         try {
+            installConscrypt();
             TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             trustManagerFactory.init((KeyStore) null);
             TrustManager[] trustManagers = trustManagerFactory.getTrustManagers();
@@ -60,6 +68,22 @@ public final class LegacyHttpCompat {
             builder.connectionSpecs(specs);
         } catch (Exception ignored) {
             builder.connectionSpecs(Collections.singletonList(ConnectionSpec.CLEARTEXT));
+        }
+    }
+
+    private static synchronized void installConscrypt() {
+        if (conscryptChecked) {
+            return;
+        }
+        conscryptChecked = true;
+        try {
+            Class<?> conscrypt = Class.forName("org.conscrypt.Conscrypt");
+            Method newProvider = conscrypt.getMethod("newProvider");
+            Provider provider = (Provider) newProvider.invoke(null);
+            Security.insertProviderAt(provider, 1);
+            Log.d(TAG, "Installed Conscrypt provider for legacy TLS");
+        } catch (Throwable error) {
+            Log.w(TAG, "Conscrypt provider unavailable; falling back to platform TLS", error);
         }
     }
 

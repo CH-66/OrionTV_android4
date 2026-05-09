@@ -27,6 +27,8 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -35,6 +37,7 @@ import okhttp3.Response;
 public class PlaybackProxyServer implements Closeable {
     private static final String TAG = "PlaybackProxy";
     private static final int MAX_MAPPED_URLS = 128;
+    private static final Pattern URI_ATTRIBUTE = Pattern.compile("URI=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
     private final OkHttpClient client = LegacyHttpCompat.newBuilder()
             .readTimeout(30, TimeUnit.SECONDS)
             .build();
@@ -251,16 +254,18 @@ public class PlaybackProxyServer implements Closeable {
             String contentType = response.header("Content-Type", "");
             boolean playlist = isPlaylist(upstreamUrl, contentType);
             if (playlist && headRequest) {
-                Log.d(TAG, "Playlist HEAD masked as TS " + upstreamUrl);
-                sendHeaders(output, 200, statusText(200), "video/mp2t", -1, null, null, false);
+                Log.d(TAG, "Playlist HEAD " + upstreamUrl);
+                sendHeaders(output, 200, statusText(200), "application/vnd.apple.mpegurl", -1, null, null, false);
                 output.flush();
                 return;
             }
             if (playlist && !headRequest) {
                 String body = response.body().string();
-                Log.d(TAG, "Playlist flatten " + upstreamUrl + " bytes=" + body.length());
-                sendHeaders(output, 200, statusText(200), "video/mp2t", -1, null, null, false);
-                streamPlaylist(upstreamUrl, body, output, 0);
+                String rewritten = rewritePlaylist(upstreamUrl, body);
+                byte[] bytes = rewritten.getBytes("UTF-8");
+                Log.d(TAG, "Playlist rewrite " + upstreamUrl + " bytes=" + body.length() + " rewritten=" + bytes.length);
+                sendHeaders(output, 200, statusText(200), "application/vnd.apple.mpegurl", bytes.length, null, null, false);
+                output.write(bytes);
                 output.flush();
                 return;
             }
@@ -358,6 +363,11 @@ public class PlaybackProxyServer implements Closeable {
         return id;
     }
 
+    private synchronized String localProxyUrl(String upstreamUrl) {
+        String id = rememberUrl(upstreamUrl);
+        return "http://127.0.0.1:" + port + "/stream/" + id + playbackExtension(upstreamUrl.toLowerCase(Locale.US));
+    }
+
     private String playbackExtension(String lowerUrl) {
         String path = lowerUrl == null ? "" : lowerUrl;
         int query = path.indexOf('?');
@@ -368,7 +378,10 @@ public class PlaybackProxyServer implements Closeable {
         if (fragment >= 0) {
             path = path.substring(0, fragment);
         }
-        if (path.contains(".m3u8") || path.endsWith(".ts") || path.contains(".ts/")) {
+        if (path.contains(".m3u8")) {
+            return ".m3u8";
+        }
+        if (path.endsWith(".ts") || path.contains(".ts/")) {
             return ".ts";
         }
         if (path.endsWith(".mp4") || path.contains(".mp4/")) {
@@ -378,6 +391,41 @@ public class PlaybackProxyServer implements Closeable {
             return ".3gp";
         }
         return ".stream";
+    }
+
+    private String rewritePlaylist(String playlistUrl, String body) {
+        if (body == null) {
+            return "";
+        }
+        String[] lines = body.replace("\r", "").split("\n", -1);
+        StringBuilder rewritten = new StringBuilder(body.length() + 256);
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            String trimmed = line == null ? "" : line.trim();
+            if (trimmed.length() == 0) {
+                rewritten.append(line == null ? "" : line);
+            } else if (trimmed.startsWith("#")) {
+                rewritten.append(rewriteUriAttributes(playlistUrl, line));
+            } else {
+                rewritten.append(localProxyUrl(resolve(playlistUrl, trimmed)));
+            }
+            if (i < lines.length - 1) {
+                rewritten.append('\n');
+            }
+        }
+        return rewritten.toString();
+    }
+
+    private String rewriteUriAttributes(String playlistUrl, String line) {
+        Matcher matcher = URI_ATTRIBUTE.matcher(line);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            String original = matcher.group(1);
+            String replacement = "URI=\"" + localProxyUrl(resolve(playlistUrl, original)) + "\"";
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
     }
 
     private void streamPlaylist(String playlistUrl, String body, OutputStream output, int depth) throws IOException {

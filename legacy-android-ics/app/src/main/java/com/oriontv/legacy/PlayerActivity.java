@@ -141,7 +141,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         String originalUrl = currentSource.episodes.get(episodeIndex);
         title.setText(currentSource.title + " / " + currentSource.source_name + " / 第" + (episodeIndex + 1) + "集");
         showOverlay("正在加载第" + (episodeIndex + 1) + "集");
-        controller.load(originalUrl);
+        String playableUrl = app.playbackProxy().proxyUrl(originalUrl);
+        controller.load(playableUrl);
     }
 
     private void showOverlay(String text) {

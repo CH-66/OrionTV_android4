@@ -41,6 +41,7 @@ dependencies {
     compile 'com.squareup.okhttp3:okhttp:3.12.13'
     compile 'com.google.code.gson:gson:2.8.5'
     compile 'com.squareup.picasso:picasso:2.5.2'
+    compile 'org.conscrypt:conscrypt-android:2.5.2'
     compile 'com.mcxiaoke.ijk.media:ijkplayer-java:0.6.2'
     compile 'com.mcxiaoke.ijk.media:ijkplayer-armv7a:0.6.2@aar'
     compile 'com.mcxiaoke.ijk.media:ijkplayer-x86:0.6.2@aar'

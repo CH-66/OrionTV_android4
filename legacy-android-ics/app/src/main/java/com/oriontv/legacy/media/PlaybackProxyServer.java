@@ -36,7 +36,7 @@ import okhttp3.Response;
 
 public class PlaybackProxyServer implements Closeable {
     private static final String TAG = "PlaybackProxy";
-    private static final int MAX_MAPPED_URLS = 128;
+    private static final int MAX_MAPPED_URLS = 4096;
     private static final Pattern URI_ATTRIBUTE = Pattern.compile("URI=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
     private final OkHttpClient client = LegacyHttpCompat.newUnsafeMediaBuilder()
             .readTimeout(30, TimeUnit.SECONDS)

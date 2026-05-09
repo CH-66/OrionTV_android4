@@ -116,7 +116,7 @@ public class LiveActivity extends BaseActivity {
         live.title = "直播";
         live.poster = "";
         for (int i = 0; i < channels.size(); i++) {
-            live.episodes.add(app.playbackProxy().proxyUrl(channels.get(i).url));
+            live.episodes.add(channels.get(i).url);
         }
         ArrayList<SearchResult> sources = new ArrayList<SearchResult>();
         sources.add(live);

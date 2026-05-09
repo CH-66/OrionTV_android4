@@ -4,6 +4,7 @@ import android.content.Context;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -25,6 +26,8 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     private final Listener listener;
     private MediaPlayer mediaPlayer;
     private String pendingUrl;
+    private ParcelFileDescriptor pendingFd;
+    private ParcelFileDescriptor activeFd;
     private boolean surfaceReady;
     private boolean prepared;
     private final android.os.Handler handler = new android.os.Handler();
@@ -50,10 +53,22 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     }
 
     public void load(String url) {
+        closePendingFd();
         pendingUrl = url;
+        pendingFd = null;
         Log.d(TAG, "load " + url);
         if (surfaceReady) {
             prepare(url);
+        }
+    }
+
+    public void load(ParcelFileDescriptor fd, String label) {
+        closePendingFd();
+        pendingUrl = label;
+        pendingFd = fd;
+        Log.d(TAG, "load fd " + label);
+        if (surfaceReady) {
+            prepare(fd, label);
         }
     }
 
@@ -96,6 +111,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
             mediaPlayer.release();
             mediaPlayer = null;
         }
+        closeActiveFd();
     }
 
     private void prepare(String url) {
@@ -143,10 +159,79 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         }
     }
 
+    private void prepare(ParcelFileDescriptor fd, String label) {
+        release();
+        activeFd = fd;
+        pendingFd = null;
+        Log.d(TAG, "prepare fd " + label);
+        mediaPlayer = new MediaPlayer();
+        mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+        mediaPlayer.setDisplay(surfaceView.getHolder());
+        mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+            @Override
+            public void onPrepared(MediaPlayer mp) {
+                prepared = true;
+                Log.d(TAG, "onPrepared duration=" + mp.getDuration());
+                mp.start();
+                listener.onPrepared(mp.getDuration());
+                handler.post(progressRunnable);
+            }
+        });
+        mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+            @Override
+            public void onCompletion(MediaPlayer mp) {
+                Log.d(TAG, "onCompletion");
+                listener.onCompleted();
+            }
+        });
+        mediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+            @Override
+            public boolean onError(MediaPlayer mp, int what, int extra) {
+                prepared = false;
+                Log.e(TAG, "onError what=" + what + " extra=" + extra + " url=" + pendingUrl);
+                listener.onError("MediaPlayer error " + what + "/" + extra);
+                return true;
+            }
+        });
+
+        try {
+            mediaPlayer.setDataSource(activeFd.getFileDescriptor());
+            mediaPlayer.prepareAsync();
+        } catch (IOException e) {
+            Log.e(TAG, "setDataSource fd IOException " + label, e);
+            listener.onError(e.getMessage());
+        } catch (RuntimeException e) {
+            Log.e(TAG, "setDataSource fd RuntimeException " + label, e);
+            listener.onError(e.getMessage());
+        }
+    }
+
+    private void closePendingFd() {
+        if (pendingFd != null) {
+            try {
+                pendingFd.close();
+            } catch (IOException ignored) {
+            }
+            pendingFd = null;
+        }
+    }
+
+    private void closeActiveFd() {
+        if (activeFd != null) {
+            try {
+                activeFd.close();
+            } catch (IOException ignored) {
+            }
+            activeFd = null;
+        }
+    }
+
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         surfaceReady = true;
-        if (pendingUrl != null) {
+        if (pendingFd != null) {
+            prepare(pendingFd, pendingUrl);
+        } else if (pendingUrl != null) {
             prepare(pendingUrl);
         }
     }

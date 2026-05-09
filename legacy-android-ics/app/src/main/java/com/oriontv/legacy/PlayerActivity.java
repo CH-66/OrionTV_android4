@@ -17,6 +17,7 @@ import com.oriontv.legacy.api.models.PlayRecord;
 import com.oriontv.legacy.api.models.SearchResult;
 import com.oriontv.legacy.data.LocalRepository;
 import com.oriontv.legacy.media.LegacyPlayerController;
+import com.oriontv.legacy.media.PlaybackProxyServer;
 import com.oriontv.legacy.media.PlaybackSourceSelector;
 import com.oriontv.legacy.net.LegacyHttpCompat;
 import com.oriontv.legacy.ui.Ui;
@@ -123,10 +124,15 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             return;
         }
         String originalUrl = currentSource.episodes.get(episodeIndex);
-        String playbackUrl = app.playbackProxy().proxyUrl(originalUrl);
         title.setText(currentSource.title + " / " + currentSource.source_name + " / 第" + (episodeIndex + 1) + "集");
         showOverlay("正在加载第" + (episodeIndex + 1) + "集");
-        controller.load(playbackUrl);
+        PlaybackProxyServer.PlaybackPipe pipe = app.playbackProxy().openHlsPipe(originalUrl);
+        if (pipe != null) {
+            controller.load(pipe.readFd, pipe.label);
+        } else {
+            String playbackUrl = app.playbackProxy().proxyUrl(originalUrl);
+            controller.load(playbackUrl);
+        }
     }
 
     private void showOverlay(String text) {

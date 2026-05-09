@@ -1,5 +1,6 @@
 package com.oriontv.legacy.media;
 
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import com.oriontv.legacy.net.LegacyHttpCompat;
@@ -41,6 +42,23 @@ public class PlaybackProxyServer implements Closeable {
     private int port = -1;
     private int nextStreamId = 1;
 
+    public static class PlaybackPipe implements Closeable {
+        public final ParcelFileDescriptor readFd;
+        public final String label;
+
+        PlaybackPipe(ParcelFileDescriptor readFd, String label) {
+            this.readFd = readFd;
+            this.label = label;
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (readFd != null) {
+                readFd.close();
+            }
+        }
+    }
+
     public synchronized void ensureStarted() throws IOException {
         if (running && serverSocket != null) {
             return;
@@ -76,6 +94,39 @@ public class PlaybackProxyServer implements Closeable {
         } catch (IOException e) {
             Log.w(TAG, "Failed to start local relay for " + originalUrl, e);
             return originalUrl;
+        }
+    }
+
+    public PlaybackPipe openHlsPipe(final String originalUrl) {
+        if (!looksLikePlaylist(originalUrl)) {
+            return null;
+        }
+        try {
+            final ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
+            executor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    ParcelFileDescriptor.AutoCloseOutputStream output = new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]);
+                    try {
+                        String body = fetchText(originalUrl);
+                        Log.d(TAG, "Pipe HLS playlist " + originalUrl + " bytes=" + body.length());
+                        streamPlaylist(originalUrl, body, output, 0);
+                        output.flush();
+                    } catch (Exception e) {
+                        Log.e(TAG, "Pipe HLS failed " + originalUrl, e);
+                    } finally {
+                        try {
+                            output.close();
+                        } catch (IOException ignored) {
+                        }
+                    }
+                }
+            });
+            Log.d(TAG, "openHlsPipe " + originalUrl);
+            return new PlaybackPipe(pipe[0], originalUrl);
+        } catch (IOException e) {
+            Log.w(TAG, "Failed to open HLS pipe for " + originalUrl, e);
+            return null;
         }
     }
 
@@ -244,6 +295,10 @@ public class PlaybackProxyServer implements Closeable {
         String lowerUrl = url == null ? "" : url.toLowerCase(Locale.US);
         String lowerType = contentType == null ? "" : contentType.toLowerCase(Locale.US);
         return lowerUrl.contains(".m3u8") || lowerType.contains("mpegurl") || lowerType.contains("vnd.apple.mpegurl");
+    }
+
+    private boolean looksLikePlaylist(String url) {
+        return url != null && url.toLowerCase(Locale.US).contains(".m3u8");
     }
 
     private synchronized String rememberUrl(String originalUrl) {

@@ -64,22 +64,49 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         }
     }
 
-    public void playPause() {
-        if (mediaPlayer == null || !prepared) return;
-        if (mediaPlayer.isPlaying()) {
-            mediaPlayer.pause();
-        } else {
-            mediaPlayer.start();
+    public boolean playPause() {
+        if (mediaPlayer == null || !prepared) return false;
+        try {
+            if (mediaPlayer.isPlaying()) {
+                mediaPlayer.pause();
+            } else {
+                mediaPlayer.start();
+            }
+            Log.d(TAG, "playPause playing=" + mediaPlayer.isPlaying());
+            return true;
+        } catch (RuntimeException e) {
+            Log.e(TAG, "playPause failed", e);
+            return false;
         }
     }
 
-    public void seekBy(int deltaMs) {
-        if (mediaPlayer == null || !prepared) return;
-        long position = mediaPlayer.getCurrentPosition() + deltaMs;
-        if (position < 0) position = 0;
-        long duration = mediaPlayer.getDuration();
-        if (duration > 0 && position > duration) position = duration;
-        mediaPlayer.seekTo(position);
+    public boolean seekBy(int deltaMs) {
+        if (mediaPlayer == null || !prepared) return false;
+        try {
+            long position = mediaPlayer.getCurrentPosition() + deltaMs;
+            if (position < 0) position = 0;
+            long duration = mediaPlayer.getDuration();
+            if (duration > 0 && position > duration) position = duration;
+            mediaPlayer.seekTo(position);
+            Log.d(TAG, "seekBy delta=" + deltaMs + " position=" + position + " duration=" + duration);
+            return true;
+        } catch (RuntimeException e) {
+            Log.e(TAG, "seekBy failed delta=" + deltaMs, e);
+            return false;
+        }
+    }
+
+    public boolean isPlaying() {
+        if (mediaPlayer == null || !prepared) return false;
+        try {
+            return mediaPlayer.isPlaying();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    public boolean isPrepared() {
+        return mediaPlayer != null && prepared;
     }
 
     public int position() {

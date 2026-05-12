@@ -5,7 +5,9 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.SurfaceView;
 import android.view.View;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
@@ -34,6 +36,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private TextView overlay;
     private TextView title;
     private ProgressBar progress;
+    private LinearLayout controls;
+    private Button playPauseButton;
     private long lastSave;
     private final android.os.Handler handler = new android.os.Handler();
     private final Runnable hideOverlay = new Runnable() {
@@ -41,7 +45,6 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         public void run() {
             overlay.setVisibility(View.GONE);
             title.setVisibility(View.GONE);
-            progress.setVisibility(View.GONE);
         }
     };
 
@@ -120,8 +123,27 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         overlay.setTextSize(18);
         overlay.setGravity(Gravity.CENTER);
         overlay.setBackgroundColor(0x99000000);
-        FrameLayout.LayoutParams overlayParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 80), Gravity.BOTTOM);
+        FrameLayout.LayoutParams overlayParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 60), Gravity.BOTTOM);
+        overlayParams.bottomMargin = Ui.dp(this, 64);
         root.addView(overlay, overlayParams);
+
+        controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.HORIZONTAL);
+        controls.setGravity(Gravity.CENTER);
+        controls.setPadding(Ui.dp(this, 12), Ui.dp(this, 8), Ui.dp(this, 12), Ui.dp(this, 20));
+        controls.setBackgroundColor(0x66000000);
+        Button rewind = playerButton("<< 15秒");
+        playPauseButton = playerButton("暂停");
+        Button forward = playerButton("15秒 >>");
+        Button previous = playerButton("上一集");
+        Button next = playerButton("下一集");
+        controls.addView(rewind);
+        controls.addView(playPauseButton);
+        controls.addView(forward);
+        controls.addView(previous);
+        controls.addView(next);
+        FrameLayout.LayoutParams controlsParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 64), Gravity.BOTTOM);
+        root.addView(controls, controlsParams);
 
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(1000);
@@ -130,7 +152,47 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
         setContentView(root);
         controller = new LegacyPlayerController(this, surface, this);
+        rewind.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                seekBy(-15000, "快退 15 秒");
+            }
+        });
+        playPauseButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                playPause();
+            }
+        });
+        forward.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                seekBy(15000, "快进 15 秒");
+            }
+        });
+        previous.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                previousEpisode();
+            }
+        });
+        next.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                nextEpisode();
+            }
+        });
+        playPauseButton.requestFocus();
         showOverlay("准备播放");
+    }
+
+    private Button playerButton(String text) {
+        Button button = Ui.button(this, text);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, Ui.dp(this, 40), 1);
+        params.setMargins(Ui.dp(this, 4), 0, Ui.dp(this, 4), 0);
+        button.setLayoutParams(params);
+        button.setTextSize(15);
+        return button;
     }
 
     private void playCurrent() {
@@ -150,40 +212,74 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         overlay.setVisibility(View.VISIBLE);
         title.setVisibility(View.VISIBLE);
         progress.setVisibility(View.VISIBLE);
+        controls.setVisibility(View.VISIBLE);
         handler.removeCallbacks(hideOverlay);
         handler.postDelayed(hideOverlay, 5000);
     }
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (event.getAction() != KeyEvent.ACTION_DOWN) {
-            return super.dispatchKeyEvent(event);
-        }
         int key = event.getKeyCode();
-        if (key == KeyEvent.KEYCODE_DPAD_CENTER || key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
-            controller.playPause();
-            showOverlay("播放 / 暂停");
-            return true;
-        }
-        if (key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_MEDIA_REWIND) {
-            controller.seekBy(-15000);
-            showOverlay("快退 15 秒");
-            return true;
-        }
-        if (key == KeyEvent.KEYCODE_DPAD_RIGHT || key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) {
-            controller.seekBy(15000);
-            showOverlay("快进 15 秒");
-            return true;
-        }
-        if (key == KeyEvent.KEYCODE_DPAD_UP) {
-            previousEpisode();
-            return true;
-        }
-        if (key == KeyEvent.KEYCODE_DPAD_DOWN) {
-            nextEpisode();
+        if (isPlayerControlKey(key)) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                handlePlayerControlKey(key, event.getRepeatCount());
+            }
             return true;
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    private boolean isPlayerControlKey(int key) {
+        return key == KeyEvent.KEYCODE_DPAD_CENTER
+                || key == KeyEvent.KEYCODE_ENTER
+                || key == KeyEvent.KEYCODE_SPACE
+                || key == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                || key == KeyEvent.KEYCODE_MEDIA_PLAY
+                || key == KeyEvent.KEYCODE_MEDIA_PAUSE
+                || key == KeyEvent.KEYCODE_DPAD_LEFT
+                || key == KeyEvent.KEYCODE_MEDIA_REWIND
+                || key == KeyEvent.KEYCODE_DPAD_RIGHT
+                || key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                || key == KeyEvent.KEYCODE_DPAD_UP
+                || key == KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                || key == KeyEvent.KEYCODE_DPAD_DOWN
+                || key == KeyEvent.KEYCODE_MEDIA_NEXT;
+    }
+
+    private void handlePlayerControlKey(int key, int repeatCount) {
+        if (key == KeyEvent.KEYCODE_DPAD_CENTER
+                || key == KeyEvent.KEYCODE_ENTER
+                || key == KeyEvent.KEYCODE_SPACE
+                || key == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                || key == KeyEvent.KEYCODE_MEDIA_PLAY
+                || key == KeyEvent.KEYCODE_MEDIA_PAUSE) {
+            if (repeatCount == 0) playPause();
+        } else if (key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_MEDIA_REWIND) {
+            seekBy(-15000, "快退 15 秒");
+        } else if (key == KeyEvent.KEYCODE_DPAD_RIGHT || key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) {
+            seekBy(15000, "快进 15 秒");
+        } else if (key == KeyEvent.KEYCODE_DPAD_UP || key == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
+            if (repeatCount == 0) previousEpisode();
+        } else if (key == KeyEvent.KEYCODE_DPAD_DOWN || key == KeyEvent.KEYCODE_MEDIA_NEXT) {
+            if (repeatCount == 0) nextEpisode();
+        }
+    }
+
+    private void playPause() {
+        if (controller != null && controller.playPause()) {
+            updatePlayPauseButton();
+            showOverlay(controller.isPlaying() ? "播放" : "暂停");
+        } else {
+            showOverlay("播放器准备中");
+        }
+    }
+
+    private void seekBy(int deltaMs, String label) {
+        if (controller != null && controller.seekBy(deltaMs)) {
+            showOverlay(label);
+        } else {
+            showOverlay("播放器准备中");
+        }
     }
 
     private void nextEpisode() {
@@ -191,6 +287,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             saveRecord(true);
             episodeIndex++;
             playCurrent();
+        } else {
+            showOverlay("已经是最后一集");
         }
     }
 
@@ -199,11 +297,14 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             saveRecord(true);
             episodeIndex--;
             playCurrent();
+        } else {
+            showOverlay("已经是第一集");
         }
     }
 
     @Override
     public void onPrepared(int durationMs) {
+        updatePlayPauseButton();
         showOverlay("开始播放");
     }
 
@@ -225,6 +326,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
     @Override
     public void onError(String message) {
+        updatePlayPauseButton();
         if (currentSource != null) selector.markFailed(currentSource.source);
         SearchResult fallback = selector.next(sources, currentSource == null ? null : currentSource.source, episodeIndex);
         if (fallback != null) {
@@ -238,6 +340,11 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         } else {
             showOverlay("播放失败：" + message);
         }
+    }
+
+    private void updatePlayPauseButton() {
+        if (playPauseButton == null) return;
+        playPauseButton.setText(controller != null && controller.isPlaying() ? "暂停" : "播放");
     }
 
     private void saveRecord(boolean immediate) {

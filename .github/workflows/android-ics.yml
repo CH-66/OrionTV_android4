@@ -19,6 +19,7 @@ on:
   push:
     branches:
       - build/android-ics-20261004
+      - build/default-poster-focus-20261004
 
 permissions:
   contents: write

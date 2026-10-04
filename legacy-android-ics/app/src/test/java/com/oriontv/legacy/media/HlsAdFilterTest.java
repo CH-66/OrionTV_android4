@@ -48,6 +48,7 @@ public class HlsAdFilterTest {
         assertEquals(2, result.removedSegments);
         assertFalse(result.playlist.contains("altcdn.example.net"));
         assertTrue(result.diagnostics.contains("postroll-host"));
+        assertFalse(result.playlist.contains("#EXT-X-DISCONTINUITY\n#EXT-X-ENDLIST"));
     }
 
     @Test
@@ -69,6 +70,39 @@ public class HlsAdFilterTest {
         assertEquals(2, result.removedSegments);
         assertFalse(result.playlist.contains("altcdn.example.net"));
         assertTrue(result.diagnostics.contains("midroll-host"));
+        assertTrue(result.diagnostics.contains("splice-reset"));
+        assertTrue(result.playlist.contains(
+                "v3.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:10.0,\nhttps://video.example.com/v4.ts"));
+    }
+
+    @Test
+    public void removesSameHostDiscontinuityIslandWithLongContentContext() {
+        String body = sameHostIslandPlaylist(18, 3, 18);
+
+        HlsAdFilter.Result result = HlsAdFilter.filter(
+                "https://video.example.com/master.m3u8", body);
+
+        assertEquals(3, result.removedSegments);
+        assertFalse(result.playlist.contains("/mid/m1.ts"));
+        assertFalse(result.playlist.contains("/mid/m2.ts"));
+        assertFalse(result.playlist.contains("/mid/m3.ts"));
+        assertTrue(result.playlist.contains("/main/b18.ts"));
+        assertTrue(result.playlist.contains("/main/a1.ts"));
+        assertTrue(result.diagnostics.contains("midroll-discontinuity"));
+        assertTrue(result.diagnostics.contains("splice-reset"));
+        assertEquals(1, countOccurrences(result.playlist, "#EXT-X-DISCONTINUITY"));
+    }
+
+    @Test
+    public void keepsSameHostDiscontinuityIslandWithoutLongContentContext() {
+        String body = sameHostIslandPlaylist(6, 3, 6);
+
+        HlsAdFilter.Result result = HlsAdFilter.filter(
+                "https://video.example.com/master.m3u8", body);
+
+        assertEquals(0, result.removedSegments);
+        assertTrue(result.playlist.contains("/mid/m1.ts"));
+        assertEquals(2, countOccurrences(result.playlist, "#EXT-X-DISCONTINUITY"));
     }
 
     @Test
@@ -111,6 +145,9 @@ public class HlsAdFilterTest {
         assertEquals(2, result.removedSegments);
         assertFalse(result.playlist.contains("adchunk1.ts"));
         assertTrue(result.playlist.contains("v3.ts"));
+        assertTrue(result.playlist.contains(
+                "v2.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:10.0,\nhttps://video.example.com/v3.ts"));
+        assertTrue(result.diagnostics.contains("splice-reset"));
         assertFalse(result.filteringBypassed);
     }
 
@@ -189,6 +226,38 @@ public class HlsAdFilterTest {
 
         assertEquals(1, result.removedSegments);
         assertFalse(result.playlist.contains("/ads/preroll.ts"));
+        assertTrue(result.playlist.contains(
+                "v2.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:10.0,\nhttps://video.example.com/v3.ts"));
+        assertTrue(result.diagnostics.contains("splice-reset"));
+    }
+
+    private static String sameHostIslandPlaylist(int before, int middle, int after) {
+        StringBuilder out = new StringBuilder("#EXTM3U");
+        for (int i = 1; i <= before; i++) {
+            out.append('\n').append(seg("https://video.example.com/main/b" + i + ".ts"));
+        }
+        out.append("\n#EXT-X-DISCONTINUITY");
+        for (int i = 1; i <= middle; i++) {
+            out.append('\n').append(seg("https://video.example.com/mid/m" + i + ".ts"));
+        }
+        out.append("\n#EXT-X-DISCONTINUITY");
+        for (int i = 1; i <= after; i++) {
+            out.append('\n').append(seg("https://video.example.com/main/a" + i + ".ts"));
+        }
+        out.append("\n#EXT-X-ENDLIST");
+        return out.toString();
+    }
+
+    private static int countOccurrences(String value, String needle) {
+        int count = 0;
+        int from = 0;
+        while (value != null && needle != null && needle.length() > 0) {
+            int at = value.indexOf(needle, from);
+            if (at < 0) break;
+            count++;
+            from = at + needle.length();
+        }
+        return count;
     }
 
     private static String playlist(String... blocks) {

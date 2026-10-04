@@ -80,6 +80,7 @@ public class PlaybackProxyServer implements Closeable {
     private volatile boolean running;
     private int port = -1;
     private int nextStreamId = 1;
+    private volatile String activeSegmentUrl;
 
     public PlaybackProxyServer() {
         this(null);
@@ -122,6 +123,120 @@ public class PlaybackProxyServer implements Closeable {
     public interface CacheCallback {
         void onReady(String filePath);
         void onError(Exception error);
+    }
+
+    public static class CacheStats {
+        public final boolean enabled;
+        public final long cachedBytes;
+        public final long cacheLimitBytes;
+        public final int cachedSegments;
+        public final int prefetchingSegments;
+        public final int currentSegmentIndex;
+        public final int totalSegments;
+        public final int lookAheadReady;
+        public final int lookAheadTarget;
+        public final int lookAheadPercent;
+        public final int bufferedUntilPermille;
+
+        CacheStats(boolean enabled, long cachedBytes, long cacheLimitBytes,
+                   int cachedSegments, int prefetchingSegments,
+                   int currentSegmentIndex, int totalSegments,
+                   int lookAheadReady, int lookAheadTarget,
+                   int lookAheadPercent, int bufferedUntilPermille) {
+            this.enabled = enabled;
+            this.cachedBytes = cachedBytes;
+            this.cacheLimitBytes = cacheLimitBytes;
+            this.cachedSegments = cachedSegments;
+            this.prefetchingSegments = prefetchingSegments;
+            this.currentSegmentIndex = currentSegmentIndex;
+            this.totalSegments = totalSegments;
+            this.lookAheadReady = lookAheadReady;
+            this.lookAheadTarget = lookAheadTarget;
+            this.lookAheadPercent = lookAheadPercent;
+            this.bufferedUntilPermille = bufferedUntilPermille;
+        }
+    }
+
+    public void resetPlaybackStats() {
+        activeSegmentUrl = null;
+    }
+
+    public CacheStats cacheStats() {
+        long bytes;
+        int cachedCount;
+        synchronized (cacheLock) {
+            bytes = segmentCacheBytes;
+            cachedCount = segmentCache.size();
+        }
+
+        int prefetchCount;
+        synchronized (prefetchLock) {
+            prefetchCount = prefetching.size();
+        }
+
+        String active = activeSegmentUrl;
+        SegmentPosition position = null;
+        if (active != null) {
+            synchronized (segmentPositions) {
+                position = segmentPositions.get(active);
+            }
+        }
+
+        if (position == null || position.segments == null || position.segments.size() == 0) {
+            return new CacheStats(
+                    segmentCacheDir != null,
+                    bytes,
+                    SEGMENT_CACHE_LIMIT_BYTES,
+                    cachedCount,
+                    prefetchCount,
+                    -1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+            );
+        }
+
+        int total = position.segments.size();
+        int start = position.index + 1;
+        int end = Math.min(total, start + PREFETCH_AHEAD_SEGMENTS);
+        int target = Math.max(0, end - start);
+        int ready = 0;
+        int contiguous = 0;
+
+        synchronized (cacheLock) {
+            for (int i = start; i < end; i++) {
+                SegmentCacheEntry entry = segmentCache.get(position.segments.get(i));
+                boolean available = entry != null && entry.file != null && entry.file.exists();
+                if (available) {
+                    ready++;
+                    if (i == start + contiguous) {
+                        contiguous++;
+                    }
+                }
+            }
+        }
+
+        int percent = target <= 0 ? 100 : (ready * 100 / target);
+        int bufferedThrough = Math.min(total - 1, position.index + contiguous);
+        int bufferedPermille = total <= 0
+                ? 0
+                : (int) (((bufferedThrough + 1L) * 1000L) / total);
+
+        return new CacheStats(
+                segmentCacheDir != null,
+                bytes,
+                SEGMENT_CACHE_LIMIT_BYTES,
+                cachedCount,
+                prefetchCount,
+                position.index,
+                total,
+                ready,
+                target,
+                percent,
+                bufferedPermille
+        );
     }
 
     public synchronized void ensureStarted() throws IOException {
@@ -300,6 +415,7 @@ public class PlaybackProxyServer implements Closeable {
                 && isKnownSegment(upstreamUrl);
 
         if (fullSegmentRequest) {
+            activeSegmentUrl = upstreamUrl;
             SegmentCacheEntry cached = getCachedSegment(upstreamUrl);
             if (cached == null) {
                 cached = waitForPrefetch(upstreamUrl);
@@ -913,7 +1029,27 @@ public class PlaybackProxyServer implements Closeable {
     }
 
     private String playbackExtension(String lowerUrl) {
-        String path = lowerUrl == null ? "" : lowerUrl;
+        String full = lowerUrl == null ? "" : lowerUrl;
+        if (full.contains(".m3u8")) {
+            return ".m3u8";
+        }
+        if (full.contains(".m4s")) {
+            return ".m4s";
+        }
+        if (full.contains(".ts")) {
+            return ".ts";
+        }
+        if (full.contains(".aac")) {
+            return ".aac";
+        }
+        if (full.contains(".mp4")) {
+            return ".mp4";
+        }
+        if (full.contains(".3gp")) {
+            return ".3gp";
+        }
+
+        String path = full;
         int query = path.indexOf('?');
         if (query >= 0) {
             path = path.substring(0, query);
@@ -921,18 +1057,6 @@ public class PlaybackProxyServer implements Closeable {
         int fragment = path.indexOf('#');
         if (fragment >= 0) {
             path = path.substring(0, fragment);
-        }
-        if (path.contains(".m3u8")) {
-            return ".m3u8";
-        }
-        if (path.endsWith(".ts") || path.contains(".ts/")) {
-            return ".ts";
-        }
-        if (path.endsWith(".mp4") || path.contains(".mp4/")) {
-            return ".mp4";
-        }
-        if (path.endsWith(".3gp") || path.contains(".3gp/")) {
-            return ".3gp";
         }
         return ".stream";
     }
@@ -1360,6 +1484,7 @@ public class PlaybackProxyServer implements Closeable {
         synchronized (segmentPositions) {
             segmentPositions.clear();
         }
+        activeSegmentUrl = null;
         mappedUrls.clear();
     }
 }

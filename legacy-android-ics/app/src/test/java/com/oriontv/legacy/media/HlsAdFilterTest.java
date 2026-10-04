@@ -48,6 +48,7 @@ public class HlsAdFilterTest {
         assertEquals(2, result.removedSegments);
         assertFalse(result.playlist.contains("altcdn.example.net"));
         assertTrue(result.diagnostics.contains("postroll-host"));
+        assertFalse(result.playlist.contains("#EXT-X-DISCONTINUITY\n#EXT-X-ENDLIST"));
     }
 
     @Test

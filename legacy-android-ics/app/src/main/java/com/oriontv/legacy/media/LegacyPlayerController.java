@@ -89,6 +89,22 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         }
     }
 
+    public boolean seekTo(int positionMs) {
+        if (mediaPlayer == null || !prepared) return false;
+        try {
+            int duration = mediaPlayer.getDuration();
+            int target = positionMs;
+            if (target < 0) target = 0;
+            if (duration > 0 && target > duration) target = duration;
+            mediaPlayer.seekTo(target);
+            Log.d(TAG, "seekTo position=" + target + " duration=" + duration);
+            return true;
+        } catch (RuntimeException e) {
+            Log.e(TAG, "seekTo failed position=" + positionMs, e);
+            return false;
+        }
+    }
+
     public boolean isPlaying() {
         if (mediaPlayer == null || !prepared) return false;
         try {

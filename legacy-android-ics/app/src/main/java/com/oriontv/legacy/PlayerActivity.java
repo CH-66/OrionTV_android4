@@ -226,7 +226,6 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         }
         return originalUrl;
     }
-    }
 
     private void showOverlay(String text) {
         overlay.setText(text);

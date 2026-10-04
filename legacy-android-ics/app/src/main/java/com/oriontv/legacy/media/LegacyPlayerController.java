@@ -349,10 +349,10 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         if (!isCurrentWorker(worker)) return;
 
         worker.setPhase("CREATE");
-        final MediaPlayer player = new MediaPlayer();
-        worker.player = player;
-
         try {
+            final MediaPlayer player = new MediaPlayer();
+            worker.player = player;
+
             player.setAudioStreamType(AudioManager.STREAM_MUSIC);
             player.setVolume(1.0f, 1.0f);
             player.setDisplay(holder);
@@ -605,6 +605,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
             buffering = false;
             playWhenReady = false;
             resumeAfterLifecyclePause = false;
+            pendingUrl = null;
         }
 
         retireWorker(worker, "failure");

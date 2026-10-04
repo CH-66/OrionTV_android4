@@ -1,11 +1,8 @@
 package com.oriontv.legacy.api;
 
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.LruCache;
 import android.widget.ImageView;
 
 import com.google.gson.Gson;
@@ -22,13 +19,14 @@ import com.oriontv.legacy.api.models.ServerConfig;
 import com.oriontv.legacy.api.models.VideoDetail;
 import com.oriontv.legacy.data.PreferencesStore;
 import com.oriontv.legacy.net.LegacyHttpCompat;
+import com.oriontv.legacy.ui.LegacyPosterLoader;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.lang.reflect.Type;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
+import java.net.URLDecoder;
 import java.util.List;
 import java.util.Map;
 import okhttp3.Call;
@@ -48,20 +46,14 @@ public class OrionApiClient {
     private final OkHttpClient client;
     private final Gson gson = new Gson();
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final LruCache<String, Bitmap> imageMemoryCache =
-            new LruCache<String, Bitmap>(6 * 1024 * 1024) {
-                @Override
-                protected int sizeOf(String key, Bitmap value) {
-                    if (value == null) return 0;
-                    return value.getRowBytes() * value.getHeight();
-                }
-            };
+    private final LegacyPosterLoader posterLoader;
 
     public OrionApiClient(Context context, PreferencesStore preferencesStore) {
         this.context = context.getApplicationContext();
         this.preferencesStore = preferencesStore;
         this.cookieStore = new CookieStore(preferencesStore);
         this.client = LegacyHttpCompat.newBuilder().build();
+        this.posterLoader = new LegacyPosterLoader(this.context, preferencesStore);
     }
 
     public String getBaseUrl() {
@@ -100,98 +92,63 @@ public class OrionApiClient {
     }
 
     public String imageProxyUrl(String imageUrl) {
-        return getBaseUrl() + "/api/image-proxy?url=" + enc(imageUrl);
+        if (imageUrl == null) return "";
+        String value = imageUrl.trim();
+        if (value.length() == 0) return "";
+
+        // Historical play records may already contain a proxied poster URL.
+        // Unwrap first so the recent-play page never nests image-proxy calls.
+        value = unwrapImageProxyUrl(value);
+
+        String base = getBaseUrl();
+        if (base == null || base.length() == 0) {
+            return value;
+        }
+        return base + "/api/image-proxy?url=" + enc(value);
     }
 
-    public void loadImage(final String url, final ImageView target, final int placeholderResId) {
-        if (target == null) return;
+    private String unwrapImageProxyUrl(String value) {
+        String current = value;
+        final String marker = "/api/image-proxy?url=";
 
-        if (url == null || url.length() == 0) {
-            target.setTag(null);
-            target.setImageResource(placeholderResId);
-            return;
-        }
+        for (int depth = 0; depth < 3; depth++) {
+            int index = current.indexOf(marker);
+            if (index < 0) break;
 
-        Bitmap cached = imageMemoryCache.get(url);
-        if (cached != null && !cached.isRecycled()) {
-            target.setTag(url);
-            target.setImageBitmap(cached);
-            return;
-        }
+            String encoded = current.substring(index + marker.length());
+            int amp = encoded.indexOf('&');
+            if (amp >= 0) encoded = encoded.substring(0, amp);
 
-        // GridView may ask for the same visible cell again when only focus changes.
-        // Do not reset it to the placeholder or start another HTTP request.
-        Object currentTag = target.getTag();
-        if (currentTag != null && url.equals(currentTag.toString())) {
-            return;
-        }
-
-        target.setTag(url);
-        target.setImageResource(placeholderResId);
-
-        Request.Builder builder = new Request.Builder().url(url);
-        String cookies = cookieStore.getCookieHeader();
-        if (cookies != null && cookies.length() > 0) {
-            builder.header("Cookie", cookies);
-        }
-
-        client.newCall(builder.build()).enqueue(new Callback() {
-            @Override
-            public void onFailure(Call call, IOException e) {
-                markImageLoadFailed(url, target, placeholderResId);
+            try {
+                String decoded = URLDecoder.decode(encoded, "UTF-8");
+                if (decoded.length() == 0 || decoded.equals(current)) break;
+                current = decoded;
+            } catch (Exception ignored) {
+                break;
             }
-
-            @Override
-            public void onResponse(Call call, Response response) throws IOException {
-                if (response == null || !response.isSuccessful() || response.body() == null) {
-                    if (response != null) response.close();
-                    markImageLoadFailed(url, target, placeholderResId);
-                    return;
-                }
-
-                InputStream stream = null;
-                try {
-                    stream = response.body().byteStream();
-                    final Bitmap bitmap = BitmapFactory.decodeStream(stream);
-                    if (bitmap == null) {
-                        markImageLoadFailed(url, target, placeholderResId);
-                        return;
-                    }
-
-                    imageMemoryCache.put(url, bitmap);
-                    main.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            Object tag = target.getTag();
-                            if (tag != null && url.equals(tag.toString())) {
-                                target.setImageBitmap(bitmap);
-                            }
-                        }
-                    });
-                } finally {
-                    if (stream != null) {
-                        stream.close();
-                    }
-                    response.close();
-                }
-            }
-        });
+        }
+        return current;
     }
 
-    private void markImageLoadFailed(final String url,
-                                     final ImageView target,
-                                     final int placeholderResId) {
-        main.post(new Runnable() {
-            @Override
-            public void run() {
-                Object tag = target.getTag();
-                if (tag != null && url.equals(tag.toString())) {
-                    // Clear the tag so a later rebind can retry the failed image.
-                    target.setTag(null);
-                    target.setImageResource(placeholderResId);
-                }
-            }
-        });
+    public void loadImage(String url, ImageView target, int placeholderResId) {
+        posterLoader.load(url, target, placeholderResId, 0, 0);
+    }
+
+    public void loadImage(String url,
+                          ImageView target,
+                          int placeholderResId,
+                          int requestedWidthPx,
+                          int requestedHeightPx) {
+        posterLoader.load(url, target, placeholderResId,
+                requestedWidthPx, requestedHeightPx);
+    }
+
+    public void cancelImage(ImageView target) {
+        posterLoader.cancel(target);
+    }
+
+    public void shutdown() {
+        posterLoader.shutdown();
     }
 
     public void login(String username, String password, ApiCallback<LoginResult> callback) {

@@ -38,6 +38,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import okhttp3.OkHttpClient;
+import okhttp3.Call;
 import okhttp3.Request;
 import okhttp3.Response;
 
@@ -74,6 +75,77 @@ public class PlaybackProxyServer implements Closeable {
 
     private final Object prefetchLock = new Object();
     private final Set<String> prefetching = new HashSet<String>();
+    private final Set<Call> preparationCalls = new HashSet<Call>();
+    public interface PreparationCallback {
+        void onReady(String url, boolean managedPreparation);
+        void onError(String message);
+    }
+
+    public void prepareIfRequired(final String url, final long sessionId,
+                                  final PreparationCallback callback) {
+        executor.execute(new Runnable() {
+            @Override public void run() {
+                Response response = null;
+                boolean managed = false;
+                try {
+                    response = executeWithPreparation(new Request.Builder().url(url).head().build(), sessionId);
+                    managed = "retry-after".equals(response.header("X-Media-Preparation"));
+                    response.close();
+                    response = null;
+                    if (!isPlaybackSessionActive(sessionId)) return;
+                    if (!managed) { callback.onReady(url, false); return; }
+                    response = executeWithPreparation(new Request.Builder().url(url).get().build(), sessionId);
+                    if (!response.isSuccessful()) {
+                        callback.onError("播放资源准备失败（HTTP " + response.code() + "）");
+                        return;
+                    }
+                    // The playlist is small. Drain it, and keep the resolved session URL.
+                    if (response.body() != null) {
+                        InputStream input = response.body().byteStream();
+                        byte[] buffer = new byte[8192];
+                        long count = 0;
+                        int n;
+                        while ((n = input.read(buffer)) != -1) {
+                            count += n;
+                            if (count > 2L * 1024L * 1024L) throw new IOException("Playlist too large");
+                        }
+                    }
+                    if (isPlaybackSessionActive(sessionId)) callback.onReady(response.request().url().toString(), true);
+                } catch (IOException error) {
+                    if (isPlaybackSessionActive(sessionId)) {
+                        if (managed) callback.onError("播放资源准备超时或网络不可用");
+                        else callback.onReady(url, false);
+                    }
+                } finally {
+                    if (response != null) response.close();
+                }
+            }
+        });
+    }
+
+    private Response executeWithPreparation(Request initial, long sessionId) throws IOException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
+        Request request = initial;
+        while (true) {
+            if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) throw new IOException("Playback cancelled");
+            Call call = client.newCall(request);
+            synchronized (preparationCalls) { preparationCalls.add(call); }
+            Response response;
+            try { response = call.execute(); }
+            finally { synchronized (preparationCalls) { preparationCalls.remove(call); } }
+            if (response.code() != 503 || !"retry-after".equals(response.header("X-Media-Preparation"))) return response;
+            request = response.request();
+            long waitMs = PreparationRetry.delayMs(response.header("Retry-After"));
+            response.close();
+            if (System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(waitMs) >= deadline) throw new IOException("Media preparation timeout");
+            long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(waitMs);
+            while (System.nanoTime() < until) {
+                if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) throw new IOException("Playback cancelled");
+                try { Thread.sleep(100L); }
+                catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new IOException("Playback cancelled"); }
+            }
+        }
+    }
 
     private final File segmentCacheDir;
     private final PreferencesStore preferencesStore;
@@ -206,6 +278,10 @@ public class PlaybackProxyServer implements Closeable {
             return;
         }
         activePlaybackSessionId = 0L;
+        synchronized (preparationCalls) {
+            for (Call call : preparationCalls) call.cancel();
+            preparationCalls.clear();
+        }
         activeSourceKey = null;
         activeSourceName = null;
         clearPlaybackRouting();
@@ -569,7 +645,7 @@ public class PlaybackProxyServer implements Closeable {
         boolean cacheComplete = false;
 
         try {
-            response = client.newCall(builder.build()).execute();
+            response = executeWithPreparation(builder.build(), sessionId);
             if (!response.isSuccessful()) {
                 Log.w(TAG, "Upstream failed code=" + response.code() + " url=" + upstreamUrl);
                 sendError(output, response.code(), "Upstream " + response.code());
@@ -817,7 +893,7 @@ public class PlaybackProxyServer implements Closeable {
                         if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
                             return;
                         }
-                        SegmentCacheEntry entry = downloadSegmentToCache(url);
+                        SegmentCacheEntry entry = downloadSegmentToCache(url, sessionId);
                         if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
                             return;
                         }
@@ -885,7 +961,7 @@ public class PlaybackProxyServer implements Closeable {
         return getCachedSegment(url);
     }
 
-    private SegmentCacheEntry downloadSegmentToCache(String url) throws IOException {
+    private SegmentCacheEntry downloadSegmentToCache(String url, long sessionId) throws IOException {
         SegmentCacheEntry existing = getCachedSegment(url);
         if (existing != null) {
             return existing;
@@ -897,7 +973,7 @@ public class PlaybackProxyServer implements Closeable {
         boolean committed = false;
 
         try {
-            response = client.newCall(new Request.Builder().url(url).build()).execute();
+            response = executeWithPreparation(new Request.Builder().url(url).build(), sessionId);
             if (!response.isSuccessful() || response.body() == null) {
                 return null;
             }

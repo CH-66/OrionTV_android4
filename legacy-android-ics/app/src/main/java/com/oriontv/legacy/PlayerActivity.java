@@ -1354,7 +1354,28 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             cacheStatusView.setText("");
         }
         progress.setSecondaryProgress(0);
-        controller.load(buildPlayableUrl(originalUrl, playbackSessionId));
+        final long preparingSession = playbackSessionId;
+        app.playbackProxy().prepareIfRequired(originalUrl, preparingSession,
+                new PlaybackProxyServer.PreparationCallback() {
+                    @Override public void onReady(final String url, final boolean managed) {
+                        handler.post(new Runnable() {
+                            @Override public void run() {
+                                if (playbackSessionId != preparingSession
+                                        || !app.playbackProxy().isPlaybackSessionActive(preparingSession)) return;
+                                controller.load(managed
+                                        ? app.playbackProxy().proxyUrl(url, preparingSession)
+                                        : buildPlayableUrl(url, preparingSession));
+                            }
+                        });
+                    }
+                    @Override public void onError(final String message) {
+                        handler.post(new Runnable() {
+                            @Override public void run() {
+                                if (playbackSessionId == preparingSession) PlayerActivity.this.onError(message);
+                            }
+                        });
+                    }
+                });
     }
 
     private void endPlaybackSession() {

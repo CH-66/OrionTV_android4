@@ -1305,7 +1305,8 @@ public class PlaybackProxyServer implements Closeable {
                     + "|" + playlistUrl + "|" + result.signature
                     + "|" + result.removedSegments
                     + "|" + result.suppressedInterstitials
-                    + "|" + result.byteRangeBypass;
+                    + "|" + result.byteRangeBypass
+                    + "|" + result.filteringBypassed;
 
             if (reportedAdSignatures.contains(signature)) {
                 return;
@@ -1316,7 +1317,7 @@ public class PlaybackProxyServer implements Closeable {
             blockedAdDurationMs += result.removedDurationMs;
             suppressedInterstitials += result.suppressedInterstitials;
             detectedAdMarkers += result.detectedAdMarkers;
-            if (result.byteRangeBypass && result.detectedAdMarkers > 0) {
+            if (result.filteringBypassed && result.detectedAdMarkers > 0) {
                 adFilteringBypassed = true;
             }
 
@@ -1329,7 +1330,7 @@ public class PlaybackProxyServer implements Closeable {
         }
 
         int evidence = result.removedSegments + result.suppressedInterstitials;
-        if (result.byteRangeBypass && result.detectedAdMarkers > 0) {
+        if (result.filteringBypassed && result.detectedAdMarkers > 0) {
             evidence++;
         }
         if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
@@ -1345,6 +1346,8 @@ public class PlaybackProxyServer implements Closeable {
                 + " suppressedInterstitials=" + result.suppressedInterstitials
                 + " markers=" + result.detectedAdMarkers
                 + " byteRangeBypass=" + result.byteRangeBypass
+                + " filteringBypassed=" + result.filteringBypassed
+                + " reasons=" + result.diagnostics
                 + " playlist=" + playlistUrl);
     }
 

@@ -28,6 +28,11 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     private String pendingUrl;
     private boolean surfaceReady;
     private boolean prepared;
+    private boolean lifecyclePaused;
+    private boolean resumeAfterLifecyclePause;
+    private boolean playWhenReady = true;
+    private boolean destroyed;
+    private int generation;
     private final android.os.Handler handler = new android.os.Handler();
 
     private final Runnable progressRunnable = new Runnable() {
@@ -51,7 +56,19 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     }
 
     public void load(String url) {
+        if (destroyed) {
+            Log.w(TAG, "Ignoring load after destroy url=" + url);
+            return;
+        }
         pendingUrl = url;
+        lifecyclePaused = false;
+        resumeAfterLifecyclePause = false;
+        playWhenReady = true;
+
+        // Invalidate the previous player immediately. If the Surface is temporarily absent,
+        // keeping the old MediaPlayer alive would let surfaceCreated() reattach the old video.
+        releaseMediaPlayer(false);
+
         Log.d(TAG, "load system " + url);
         if (surfaceReady) {
             prepare(url);
@@ -63,10 +80,13 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         try {
             if (mediaPlayer.isPlaying()) {
                 mediaPlayer.pause();
+                playWhenReady = false;
             } else {
                 mediaPlayer.start();
+                playWhenReady = true;
             }
-            Log.d(TAG, "playPause system playing=" + mediaPlayer.isPlaying());
+            Log.d(TAG, "playPause system playing=" + mediaPlayer.isPlaying()
+                    + " playWhenReady=" + playWhenReady);
             return true;
         } catch (RuntimeException e) {
             Log.e(TAG, "playPause failed", e);
@@ -137,102 +157,220 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         }
     }
 
-    public void release() {
-        handler.removeCallbacks(progressRunnable);
-        prepared = false;
-        if (mediaPlayer != null) {
+    public void pauseForLifecycle() {
+        if (destroyed) return;
+        lifecyclePaused = true;
+
+        resumeAfterLifecyclePause = playWhenReady;
+        if (mediaPlayer != null && prepared) {
             try {
-                mediaPlayer.stop();
+                if (mediaPlayer.isPlaying()) {
+                    mediaPlayer.pause();
+                }
             } catch (RuntimeException ignored) {
             }
-            try {
-                mediaPlayer.setDisplay(null);
-            } catch (RuntimeException ignored) {
-            }
-            mediaPlayer.release();
-            mediaPlayer = null;
         }
     }
 
+    public void resumeFromLifecycle() {
+        if (destroyed || !lifecyclePaused) return;
+        lifecyclePaused = false;
+
+        if (mediaPlayer != null && prepared) {
+            if (playWhenReady && resumeAfterLifecyclePause && surfaceReady) {
+                try {
+                    mediaPlayer.start();
+                    resumeAfterLifecyclePause = false;
+                } catch (RuntimeException e) {
+                    Log.e(TAG, "resumeFromLifecycle failed", e);
+                }
+            }
+            // If the Surface has not returned yet, surfaceCreated() will resume playback.
+            return;
+        }
+
+        if (mediaPlayer == null && pendingUrl != null && surfaceReady) {
+            prepare(pendingUrl);
+        }
+    }
+
+    public void destroy() {
+        if (destroyed) return;
+        destroyed = true;
+        lifecyclePaused = false;
+        resumeAfterLifecyclePause = false;
+        playWhenReady = false;
+        releaseMediaPlayer(true);
+        try {
+            surfaceView.getHolder().removeCallback(this);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    public void release() {
+        destroy();
+    }
+
+    private void releaseMediaPlayer(boolean clearPendingUrl) {
+        // Invalidate every listener captured by the previous MediaPlayer before releasing it.
+        generation++;
+        handler.removeCallbacks(progressRunnable);
+        prepared = false;
+
+        MediaPlayer old = mediaPlayer;
+        mediaPlayer = null;
+        if (old != null) {
+            try {
+                old.setOnPreparedListener(null);
+                old.setOnVideoSizeChangedListener(null);
+                old.setOnInfoListener(null);
+                old.setOnCompletionListener(null);
+                old.setOnErrorListener(null);
+            } catch (RuntimeException ignored) {
+            }
+            try {
+                old.stop();
+            } catch (RuntimeException ignored) {
+            }
+            try {
+                old.setDisplay(null);
+            } catch (RuntimeException ignored) {
+            }
+            try {
+                old.release();
+            } catch (RuntimeException ignored) {
+            }
+        }
+
+        if (clearPendingUrl) {
+            pendingUrl = null;
+        }
+    }
+
+    private boolean isCurrent(MediaPlayer player, int token) {
+        return !destroyed && mediaPlayer == player && generation == token;
+    }
+
     private void prepare(String url) {
-        release();
-        Log.d(TAG, "prepare system MediaPlayer " + url);
+        if (destroyed || url == null || url.length() == 0) return;
 
-        mediaPlayer = new MediaPlayer();
-        mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-        mediaPlayer.setVolume(1.0f, 1.0f);
-        mediaPlayer.setDisplay(surfaceView.getHolder());
-        mediaPlayer.setScreenOnWhilePlaying(true);
+        releaseMediaPlayer(false);
+        final int token = ++generation;
+        Log.d(TAG, "prepare system generation=" + token + " " + url);
 
-        mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+        final MediaPlayer player = new MediaPlayer();
+        mediaPlayer = player;
+        player.setAudioStreamType(AudioManager.STREAM_MUSIC);
+        player.setVolume(1.0f, 1.0f);
+        player.setDisplay(surfaceView.getHolder());
+        player.setScreenOnWhilePlaying(true);
+
+        player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
             @Override
             public void onPrepared(MediaPlayer mp) {
+                if (!isCurrent(mp, token)) {
+                    Log.d(TAG, "ignore stale onPrepared generation=" + token);
+                    return;
+                }
                 prepared = true;
-                Log.d(TAG, "system onPrepared duration=" + mp.getDuration()
+                Log.d(TAG, "system onPrepared generation=" + token
+                        + " duration=" + mp.getDuration()
                         + " video=" + mp.getVideoWidth() + "x" + mp.getVideoHeight());
-                mp.start();
+                if (playWhenReady && !lifecyclePaused && surfaceReady) {
+                    mp.start();
+                } else if (playWhenReady) {
+                    resumeAfterLifecyclePause = true;
+                }
                 listener.onPrepared(mp.getDuration());
                 handler.removeCallbacks(progressRunnable);
                 handler.post(progressRunnable);
             }
         });
 
-        mediaPlayer.setOnVideoSizeChangedListener(new MediaPlayer.OnVideoSizeChangedListener() {
+        player.setOnVideoSizeChangedListener(new MediaPlayer.OnVideoSizeChangedListener() {
             @Override
             public void onVideoSizeChanged(MediaPlayer mp, int width, int height) {
-                Log.d(TAG, "system videoSize=" + width + "x" + height);
+                if (!isCurrent(mp, token)) return;
+                Log.d(TAG, "system videoSize generation=" + token + " "
+                        + width + "x" + height);
                 listener.onVideoSizeChanged(width, height);
             }
         });
 
-        mediaPlayer.setOnInfoListener(new MediaPlayer.OnInfoListener() {
+        player.setOnInfoListener(new MediaPlayer.OnInfoListener() {
             @Override
             public boolean onInfo(MediaPlayer mp, int what, int extra) {
+                if (!isCurrent(mp, token)) return true;
                 if (what == 701) {
-                    Log.d(TAG, "system buffering start");
+                    Log.d(TAG, "system buffering start generation=" + token);
                     listener.onBuffering(true);
                 } else if (what == 702) {
-                    Log.d(TAG, "system buffering end");
+                    Log.d(TAG, "system buffering end generation=" + token);
                     listener.onBuffering(false);
                 }
                 return false;
             }
         });
 
-        mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+        player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
             @Override
             public void onCompletion(MediaPlayer mp) {
-                Log.d(TAG, "system onCompletion");
+                if (!isCurrent(mp, token)) return;
+                Log.d(TAG, "system onCompletion generation=" + token);
+                playWhenReady = false;
                 listener.onCompleted();
             }
         });
 
-        mediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+        player.setOnErrorListener(new MediaPlayer.OnErrorListener() {
             @Override
             public boolean onError(MediaPlayer mp, int what, int extra) {
+                if (!isCurrent(mp, token)) {
+                    Log.d(TAG, "ignore stale onError generation=" + token
+                            + " what=" + what + " extra=" + extra);
+                    return true;
+                }
                 prepared = false;
-                Log.e(TAG, "system onError what=" + what + " extra=" + extra + " url=" + pendingUrl);
+                playWhenReady = false;
+                Log.e(TAG, "system onError generation=" + token
+                        + " what=" + what + " extra=" + extra + " url=" + pendingUrl);
                 listener.onError("System player error " + what + "/" + extra);
                 return true;
             }
         });
 
         try {
-            mediaPlayer.setDataSource(url);
-            mediaPlayer.prepareAsync();
+            player.setDataSource(url);
+            player.prepareAsync();
         } catch (IOException e) {
-            Log.e(TAG, "system setDataSource IOException " + url, e);
-            listener.onError(e.getMessage());
+            if (isCurrent(player, token)) {
+                Log.e(TAG, "system setDataSource IOException " + url, e);
+                listener.onError(e.getMessage());
+            }
         } catch (RuntimeException e) {
-            Log.e(TAG, "system setDataSource RuntimeException " + url, e);
-            listener.onError(e.getMessage());
+            if (isCurrent(player, token)) {
+                Log.e(TAG, "system setDataSource RuntimeException " + url, e);
+                listener.onError(e.getMessage());
+            }
         }
     }
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         surfaceReady = true;
-        if (pendingUrl != null && mediaPlayer == null) {
+        if (destroyed) return;
+
+        if (mediaPlayer != null) {
+            try {
+                mediaPlayer.setDisplay(holder);
+                if (prepared && playWhenReady && !lifecyclePaused && resumeAfterLifecyclePause) {
+                    mediaPlayer.start();
+                    resumeAfterLifecyclePause = false;
+                }
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Failed to reattach Surface", e);
+            }
+        } else if (pendingUrl != null) {
             prepare(pendingUrl);
         }
     }
@@ -245,6 +383,15 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     public void surfaceDestroyed(SurfaceHolder holder) {
         surfaceReady = false;
         if (mediaPlayer != null) {
+            if (prepared && playWhenReady) {
+                try {
+                    if (mediaPlayer.isPlaying()) {
+                        mediaPlayer.pause();
+                    }
+                    resumeAfterLifecyclePause = true;
+                } catch (RuntimeException ignored) {
+                }
+            }
             try {
                 mediaPlayer.setDisplay(null);
             } catch (RuntimeException ignored) {

@@ -88,6 +88,9 @@ public class PlaybackProxyServer implements Closeable {
     private volatile int detectedAdMarkers;
     private volatile boolean adFilteringBypassed;
 
+    private long playbackSessionSequence;
+    private volatile long activePlaybackSessionId;
+
     private ServerSocket serverSocket;
     private volatile boolean running;
     private int port = -1;
@@ -187,9 +190,50 @@ public class PlaybackProxyServer implements Closeable {
         }
     }
 
+    public synchronized long beginPlaybackSession(String sourceKey, String sourceName) {
+        long sessionId = ++playbackSessionSequence;
+        activePlaybackSessionId = sessionId;
+        activeSourceKey = sourceKey;
+        activeSourceName = sourceName;
+        clearPlaybackRouting();
+        resetPlaybackStats();
+        Log.d(TAG, "Begin playback session id=" + sessionId + " source=" + sourceName);
+        return sessionId;
+    }
+
+    public synchronized void endPlaybackSession(long sessionId) {
+        if (sessionId <= 0L || activePlaybackSessionId != sessionId) {
+            return;
+        }
+        activePlaybackSessionId = 0L;
+        activeSourceKey = null;
+        activeSourceName = null;
+        clearPlaybackRouting();
+        resetPlaybackStats();
+        Log.d(TAG, "End playback session id=" + sessionId);
+    }
+
     public void setPlaybackContext(String sourceKey, String sourceName) {
         activeSourceKey = sourceKey;
         activeSourceName = sourceName;
+    }
+
+    public boolean isPlaybackSessionActive(long sessionId) {
+        return sessionId > 0L && activePlaybackSessionId == sessionId;
+    }
+
+    private void clearPlaybackRouting() {
+        activeSegmentUrl = null;
+        synchronized (segmentPositions) {
+            segmentPositions.clear();
+        }
+        synchronized (prefetchLock) {
+            prefetching.clear();
+            prefetchLock.notifyAll();
+        }
+        synchronized (this) {
+            mappedUrls.clear();
+        }
     }
 
     public void resetPlaybackStats() {
@@ -308,7 +352,15 @@ public class PlaybackProxyServer implements Closeable {
     }
 
     public synchronized String proxyUrl(String originalUrl) {
+        return proxyUrl(originalUrl, activePlaybackSessionId);
+    }
+
+    public synchronized String proxyUrl(String originalUrl, long sessionId) {
         if (originalUrl == null || originalUrl.length() == 0) {
+            return originalUrl;
+        }
+        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+            Log.d(TAG, "Skip stale proxy mapping session=" + sessionId + " url=" + originalUrl);
             return originalUrl;
         }
         String lower = originalUrl.toLowerCase(Locale.US);
@@ -320,7 +372,7 @@ public class PlaybackProxyServer implements Closeable {
         }
         try {
             ensureStarted();
-            String id = rememberUrl(originalUrl);
+            String id = rememberUrl(originalUrl, sessionId);
             String localUrl = "http://127.0.0.1:" + port + "/stream/" + id + playbackExtension(lower);
             Log.d(TAG, "proxyUrl mapped id=" + id + " local=" + localUrl + " upstream=" + originalUrl);
             return localUrl;
@@ -334,6 +386,7 @@ public class PlaybackProxyServer implements Closeable {
         if (!looksLikePlaylist(originalUrl)) {
             return null;
         }
+        final long sessionId = activePlaybackSessionId;
         try {
             final ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
             executor.execute(new Runnable() {
@@ -344,7 +397,7 @@ public class PlaybackProxyServer implements Closeable {
                     try {
                         String body = fetchText(originalUrl);
                         Log.d(TAG, "Pipe HLS playlist " + originalUrl + " bytes=" + body.length());
-                        streamPlaylist(originalUrl, body, output, 0);
+                        streamPlaylist(originalUrl, body, output, 0, sessionId);
                         output.flush();
                     } catch (Exception e) {
                         Log.e(TAG, "Pipe HLS failed " + originalUrl, e);
@@ -368,6 +421,7 @@ public class PlaybackProxyServer implements Closeable {
         if (!looksLikePlaylist(originalUrl)) {
             return false;
         }
+        final long sessionId = activePlaybackSessionId;
         executor.execute(new Runnable() {
             @Override
             public void run() {
@@ -382,7 +436,7 @@ public class PlaybackProxyServer implements Closeable {
                     String body = fetchText(originalUrl);
                     Log.d(TAG, "Cache HLS playlist " + originalUrl + " bytes=" + body.length()
                             + " file=" + file.getAbsolutePath());
-                    streamPlaylist(originalUrl, body, output, 0);
+                    streamPlaylist(originalUrl, body, output, 0, sessionId);
                     output.flush();
                     callback.onReady(file.getAbsolutePath());
                 } catch (Exception e) {
@@ -435,6 +489,15 @@ public class PlaybackProxyServer implements Closeable {
             }
             String method = parts[0];
             String path = normalizeRequestPath(parts[1]);
+            long requestSessionId = extractSessionId(path);
+            if (requestSessionId > 0L && !isPlaybackSessionActive(requestSessionId)) {
+                Log.d(TAG, "Reject stale playback session=" + requestSessionId + " path=" + path);
+                sendError(output, 410, "Stale playback session");
+                return;
+            }
+            if (requestSessionId <= 0L) {
+                requestSessionId = activePlaybackSessionId;
+            }
             Map<String, String> headers = readHeaders(input);
             String upstream = resolveUpstream(path);
             if (upstream == null || upstream.length() == 0) {
@@ -444,7 +507,7 @@ public class PlaybackProxyServer implements Closeable {
             }
             Log.d(TAG, "Incoming " + method + " " + path + " -> " + upstream
                     + " range=" + headers.get("range"));
-            relay(method, upstream, headers, output);
+            relay(method, upstream, headers, output, requestSessionId);
         } catch (SocketException e) {
             Log.d(TAG, "Relay client disconnected: " + e.getMessage());
         } catch (SocketTimeoutException e) {
@@ -460,7 +523,12 @@ public class PlaybackProxyServer implements Closeable {
     }
 
     private void relay(String method, String upstreamUrl, Map<String, String> requestHeaders,
-                       OutputStream output) throws IOException {
+                       OutputStream output, long sessionId) throws IOException {
+        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+            sendError(output, 410, "Stale playback session");
+            return;
+        }
+
         boolean headRequest = "HEAD".equalsIgnoreCase(method);
         String range = requestHeaders.get("range");
         boolean fullSegmentRequest = !headRequest
@@ -468,15 +536,15 @@ public class PlaybackProxyServer implements Closeable {
                 && isKnownSegment(upstreamUrl);
 
         if (fullSegmentRequest) {
-            activeSegmentUrl = upstreamUrl;
+            markActiveSegment(sessionId, upstreamUrl);
             SegmentCacheEntry cached = getCachedSegment(upstreamUrl);
             if (cached == null) {
-                cached = waitForPrefetch(upstreamUrl);
+                cached = waitForPrefetch(upstreamUrl, sessionId);
             }
             if (cached != null) {
                 if (serveCachedSegment(cached, output)) {
                     Log.d(TAG, "Segment cache hit bytes=" + cached.length + " url=" + upstreamUrl);
-                    scheduleReadAhead(upstreamUrl);
+                    scheduleReadAhead(upstreamUrl, sessionId);
                     return;
                 }
                 Log.d(TAG, "Segment cache entry disappeared before open; fallback upstream url="
@@ -521,7 +589,7 @@ public class PlaybackProxyServer implements Closeable {
 
             if (playlist && !headRequest) {
                 String body = response.body().string();
-                String rewritten = rewritePlaylist(upstreamUrl, body);
+                String rewritten = rewritePlaylist(upstreamUrl, body, sessionId);
                 byte[] bytes = rewritten.getBytes("UTF-8");
                 Log.d(TAG, "Playlist rewrite " + upstreamUrl + " bytes=" + body.length()
                         + " rewritten=" + bytes.length);
@@ -567,7 +635,7 @@ public class PlaybackProxyServer implements Closeable {
                     && (contentLength < 0 || contentLength <= MAX_CACHEABLE_SEGMENT_BYTES);
 
             if (fullSegmentRequest) {
-                scheduleReadAhead(upstreamUrl);
+                scheduleReadAhead(upstreamUrl, sessionId);
             }
 
             if (cacheableSegment) {
@@ -647,13 +715,19 @@ public class PlaybackProxyServer implements Closeable {
         }
     }
 
-    private void registerPlaylistSegments(List<String> segments) {
+    private void registerPlaylistSegments(List<String> segments, long sessionId) {
+        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+            return;
+        }
         if (segments == null || segments.size() == 0) {
             return;
         }
 
         List<String> shared = new ArrayList<String>(segments);
         synchronized (segmentPositions) {
+            if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+                return;
+            }
             for (int i = 0; i < shared.size(); i++) {
                 String url = shared.get(i);
                 segmentPositions.put(url, new SegmentPosition(shared, i));
@@ -667,6 +741,14 @@ public class PlaybackProxyServer implements Closeable {
         Log.d(TAG, "Registered HLS media segments count=" + shared.size());
     }
 
+    private synchronized boolean markActiveSegment(long sessionId, String url) {
+        if (sessionId > 0L && activePlaybackSessionId != sessionId) {
+            return false;
+        }
+        activeSegmentUrl = url;
+        return true;
+    }
+
     private boolean isKnownSegment(String url) {
         if (url == null) {
             return false;
@@ -676,9 +758,15 @@ public class PlaybackProxyServer implements Closeable {
         }
     }
 
-    private void scheduleReadAhead(String currentUrl) {
+    private void scheduleReadAhead(String currentUrl, long sessionId) {
+        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+            return;
+        }
         SegmentPosition position;
         synchronized (segmentPositions) {
+            if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+                return;
+            }
             position = segmentPositions.get(currentUrl);
         }
         if (position == null || position.segments == null) {
@@ -691,11 +779,14 @@ public class PlaybackProxyServer implements Closeable {
         );
 
         for (int i = position.index + 1; i < end; i++) {
-            schedulePrefetch(position.segments.get(i));
+            schedulePrefetch(position.segments.get(i), sessionId);
         }
     }
 
-    private void schedulePrefetch(final String url) {
+    private void schedulePrefetch(final String url, final long sessionId) {
+        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+            return;
+        }
         if (segmentCacheDir == null || url == null || url.length() == 0) {
             return;
         }
@@ -703,14 +794,18 @@ public class PlaybackProxyServer implements Closeable {
             return;
         }
 
+        final String prefetchKey = prefetchKey(sessionId, url);
         synchronized (prefetchLock) {
-            if (prefetching.contains(url)) {
+            if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+                return;
+            }
+            if (prefetching.contains(prefetchKey)) {
                 return;
             }
             if (prefetching.size() >= MAX_PREFETCH_QUEUED) {
                 return;
             }
-            prefetching.add(url);
+            prefetching.add(prefetchKey);
         }
 
         try {
@@ -719,7 +814,13 @@ public class PlaybackProxyServer implements Closeable {
                 public void run() {
                     long startedAt = System.currentTimeMillis();
                     try {
+                        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+                            return;
+                        }
                         SegmentCacheEntry entry = downloadSegmentToCache(url);
+                        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+                            return;
+                        }
                         if (entry != null) {
                             Log.d(TAG, "Prefetch ready bytes=" + entry.length
                                     + " ms=" + (System.currentTimeMillis() - startedAt)
@@ -730,7 +831,7 @@ public class PlaybackProxyServer implements Closeable {
                                 + " error=" + e.getMessage());
                     } finally {
                         synchronized (prefetchLock) {
-                            prefetching.remove(url);
+                            prefetching.remove(prefetchKey);
                             prefetchLock.notifyAll();
                         }
                     }
@@ -738,14 +839,22 @@ public class PlaybackProxyServer implements Closeable {
             });
         } catch (RuntimeException e) {
             synchronized (prefetchLock) {
-                prefetching.remove(url);
+                prefetching.remove(prefetchKey);
                 prefetchLock.notifyAll();
             }
             Log.d(TAG, "Prefetch executor rejected url=" + url);
         }
     }
 
-    private SegmentCacheEntry waitForPrefetch(String url) {
+    private String prefetchKey(long sessionId, String url) {
+        return sessionId + "|" + url;
+    }
+
+    private SegmentCacheEntry waitForPrefetch(String url, long sessionId) {
+        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+            return null;
+        }
+        final String prefetchKey = prefetchKey(sessionId, url);
         SegmentCacheEntry cached = getCachedSegment(url);
         if (cached != null) {
             return cached;
@@ -753,10 +862,10 @@ public class PlaybackProxyServer implements Closeable {
 
         long deadline = System.currentTimeMillis() + PREFETCH_WAIT_MS;
         synchronized (prefetchLock) {
-            if (!prefetching.contains(url)) {
+            if (!prefetching.contains(prefetchKey)) {
                 return null;
             }
-            while (prefetching.contains(url)) {
+            while (prefetching.contains(prefetchKey)) {
                 long remaining = deadline - System.currentTimeMillis();
                 if (remaining <= 0L) {
                     break;
@@ -770,6 +879,9 @@ public class PlaybackProxyServer implements Closeable {
             }
         }
 
+        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+            return null;
+        }
         return getCachedSegment(url);
     }
 
@@ -1062,8 +1174,8 @@ public class PlaybackProxyServer implements Closeable {
         return url != null && url.toLowerCase(Locale.US).contains(".m3u8");
     }
 
-    private synchronized String rememberUrl(String originalUrl) {
-        String id = String.valueOf(nextStreamId++);
+    private synchronized String rememberUrl(String originalUrl, long sessionId) {
+        String id = sessionId + "-" + String.valueOf(nextStreamId++);
         if (nextStreamId == Integer.MAX_VALUE) {
             nextStreamId = 1;
         }
@@ -1075,8 +1187,11 @@ public class PlaybackProxyServer implements Closeable {
         return id;
     }
 
-    private synchronized String localProxyUrl(String upstreamUrl) {
-        String id = rememberUrl(upstreamUrl);
+    private synchronized String localProxyUrl(String upstreamUrl, long sessionId) {
+        if (sessionId > 0L && activePlaybackSessionId != sessionId) {
+            return upstreamUrl;
+        }
+        String id = rememberUrl(upstreamUrl, sessionId);
         return "http://127.0.0.1:" + port + "/stream/" + id
                 + playbackExtension(upstreamUrl.toLowerCase(Locale.US));
     }
@@ -1114,14 +1229,17 @@ public class PlaybackProxyServer implements Closeable {
         return ".stream";
     }
 
-    private String rewritePlaylist(String playlistUrl, String body) {
+    private String rewritePlaylist(String playlistUrl, String body, long sessionId) {
         if (body == null) {
             return "";
+        }
+        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+            return body;
         }
 
         HlsAdFilter.Result adResult = HlsAdFilter.filter(playlistUrl, body);
         if (adResult.hasAdEvidence()) {
-            noteAdFiltering(playlistUrl, adResult);
+            noteAdFiltering(playlistUrl, adResult, sessionId);
         }
         body = adResult.playlist;
 
@@ -1143,13 +1261,13 @@ public class PlaybackProxyServer implements Closeable {
             if (trimmed.length() == 0) {
                 rewritten.append(line == null ? "" : line);
             } else if (trimmed.startsWith("#")) {
-                rewritten.append(rewriteUriAttributes(playlistUrl, line));
+                rewritten.append(rewriteUriAttributes(playlistUrl, line, sessionId));
             } else {
                 String resolved = resolve(playlistUrl, trimmed);
                 if (mediaSegments != null) {
                     mediaSegments.add(resolved);
                 }
-                rewritten.append(localProxyUrl(resolved));
+                rewritten.append(localProxyUrl(resolved, sessionId));
             }
 
             if (i < lines.length - 1) {
@@ -1158,7 +1276,7 @@ public class PlaybackProxyServer implements Closeable {
         }
 
         if (mediaSegments != null && mediaSegments.size() > 0) {
-            registerPlaylistSegments(mediaSegments);
+            registerPlaylistSegments(mediaSegments, sessionId);
         } else if (mediaPlaylist && byteRangePlaylist) {
             Log.d(TAG, "Byte-range HLS detected; segment prefetch cache disabled for "
                     + playlistUrl);
@@ -1167,16 +1285,28 @@ public class PlaybackProxyServer implements Closeable {
         return rewritten.toString();
     }
 
-    private void noteAdFiltering(String playlistUrl, HlsAdFilter.Result result) {
+    private void noteAdFiltering(String playlistUrl, HlsAdFilter.Result result, long sessionId) {
         if (result == null || !result.hasAdEvidence()) return;
+        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) return;
 
-        String signature = (activeSourceKey == null ? "" : activeSourceKey)
-                + "|" + playlistUrl + "|" + result.signature
-                + "|" + result.removedSegments
-                + "|" + result.suppressedInterstitials
-                + "|" + result.byteRangeBypass;
-
+        String sourceKey;
+        String sourceName;
         synchronized (adStatsLock) {
+            // Recheck inside the same critical section used by resetPlaybackStats().
+            // This closes the race where a new session resets stats while an old playlist
+            // has already passed the first stale-session check.
+            if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+                return;
+            }
+
+            sourceKey = activeSourceKey;
+            sourceName = activeSourceName;
+            String signature = (sourceKey == null ? "" : sourceKey)
+                    + "|" + playlistUrl + "|" + result.signature
+                    + "|" + result.removedSegments
+                    + "|" + result.suppressedInterstitials
+                    + "|" + result.byteRangeBypass;
+
             if (reportedAdSignatures.contains(signature)) {
                 return;
             }
@@ -1202,11 +1332,14 @@ public class PlaybackProxyServer implements Closeable {
         if (result.byteRangeBypass && result.detectedAdMarkers > 0) {
             evidence++;
         }
-        if (preferencesStore != null && activeSourceKey != null && evidence > 0) {
-            preferencesStore.recordSourceAdDetection(activeSourceKey, evidence);
+        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+            return;
+        }
+        if (preferencesStore != null && sourceKey != null && evidence > 0) {
+            preferencesStore.recordSourceAdDetection(sourceKey, evidence);
         }
 
-        Log.i(TAG, "HLS ad filter source=" + activeSourceName
+        Log.i(TAG, "HLS ad filter source=" + sourceName
                 + " removedSegments=" + result.removedSegments
                 + " removedMs=" + result.removedDurationMs
                 + " suppressedInterstitials=" + result.suppressedInterstitials
@@ -1215,27 +1348,30 @@ public class PlaybackProxyServer implements Closeable {
                 + " playlist=" + playlistUrl);
     }
 
-    private String rewriteUriAttributes(String playlistUrl, String line) {
+    private String rewriteUriAttributes(String playlistUrl, String line, long sessionId) {
         Matcher matcher = URI_ATTRIBUTE.matcher(line);
         StringBuffer buffer = new StringBuffer();
         while (matcher.find()) {
             String original = matcher.group(1);
-            String replacement = "URI=\"" + localProxyUrl(resolve(playlistUrl, original)) + "\"";
+            String replacement = "URI=\"" + localProxyUrl(resolve(playlistUrl, original), sessionId) + "\"";
             matcher.appendReplacement(buffer, Matcher.quoteReplacement(replacement));
         }
         matcher.appendTail(buffer);
         return buffer.toString();
     }
 
-    private void streamPlaylist(String playlistUrl, String body, OutputStream output, int depth)
-            throws IOException {
+    private void streamPlaylist(String playlistUrl, String body, OutputStream output, int depth,
+                                long sessionId) throws IOException {
+        if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+            throw new IOException("Playback session ended");
+        }
         if (depth > 3) {
             throw new IOException("Playlist nesting too deep");
         }
 
         HlsAdFilter.Result adResult = HlsAdFilter.filter(playlistUrl, body);
         if (adResult.hasAdEvidence()) {
-            noteAdFiltering(playlistUrl, adResult);
+            noteAdFiltering(playlistUrl, adResult, sessionId);
         }
         body = adResult.playlist;
 
@@ -1243,13 +1379,16 @@ public class PlaybackProxyServer implements Closeable {
         if (parts.masterPlaylistUrl != null) {
             Log.d(TAG, "Follow master playlist " + playlistUrl + " -> " + parts.masterPlaylistUrl);
             String nestedBody = fetchText(parts.masterPlaylistUrl);
-            streamPlaylist(parts.masterPlaylistUrl, nestedBody, output, depth + 1);
+            streamPlaylist(parts.masterPlaylistUrl, nestedBody, output, depth + 1, sessionId);
             return;
         }
 
         Log.d(TAG, "Stream TS segments count=" + parts.segments.size()
                 + " playlist=" + playlistUrl);
         for (int i = 0; i < parts.segments.size(); i++) {
+            if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+                throw new IOException("Playback session ended");
+            }
             String segment = parts.segments.get(i);
             Log.d(TAG, "Segment " + (i + 1) + "/" + parts.segments.size() + " " + segment);
             streamSegment(segment, output);
@@ -1327,6 +1466,27 @@ public class PlaybackProxyServer implements Closeable {
             return URI.create(baseUrl).resolve(relative).toString();
         } catch (RuntimeException e) {
             return relative;
+        }
+    }
+
+    private long extractSessionId(String path) {
+        if (path == null) return 0L;
+        int queryIndex = path.indexOf('?');
+        String cleanPath = queryIndex >= 0 ? path.substring(0, queryIndex) : path;
+        if (!cleanPath.startsWith("/stream/")) return 0L;
+
+        String id = cleanPath.substring("/stream/".length());
+        int dot = id.indexOf('.');
+        if (dot >= 0) id = id.substring(0, dot);
+        int slash = id.indexOf('/');
+        if (slash >= 0) id = id.substring(0, slash);
+        int dash = id.indexOf('-');
+        if (dash <= 0) return 0L;
+
+        try {
+            return Long.parseLong(id.substring(0, dash));
+        } catch (NumberFormatException ignored) {
+            return 0L;
         }
     }
 
@@ -1486,6 +1646,8 @@ public class PlaybackProxyServer implements Closeable {
                 return "Forbidden";
             case 404:
                 return "Not Found";
+            case 410:
+                return "Gone";
             case 416:
                 return "Range Not Satisfiable";
             case 500:

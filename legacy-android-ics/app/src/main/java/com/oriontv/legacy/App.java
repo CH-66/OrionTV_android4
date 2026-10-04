@@ -21,7 +21,7 @@ public class App extends Application {
         preferencesStore = new PreferencesStore(this);
         localRepository = new LocalRepository(preferencesStore);
         apiClient = new OrionApiClient(this, preferencesStore);
-        playbackProxyServer = new PlaybackProxyServer(this);
+        playbackProxyServer = new PlaybackProxyServer(this, preferencesStore);
     }
 
     public static App get() {

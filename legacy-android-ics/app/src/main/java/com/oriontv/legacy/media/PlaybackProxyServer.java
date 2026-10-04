@@ -1232,6 +1232,13 @@ public class PlaybackProxyServer implements Closeable {
         if (depth > 3) {
             throw new IOException("Playlist nesting too deep");
         }
+
+        HlsAdFilter.Result adResult = HlsAdFilter.filter(playlistUrl, body);
+        if (adResult.hasAdEvidence()) {
+            noteAdFiltering(playlistUrl, adResult);
+        }
+        body = adResult.playlist;
+
         PlaylistParts parts = parsePlaylist(playlistUrl, body);
         if (parts.masterPlaylistUrl != null) {
             Log.d(TAG, "Follow master playlist " + playlistUrl + " -> " + parts.masterPlaylistUrl);

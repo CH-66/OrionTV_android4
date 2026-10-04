@@ -13,8 +13,8 @@ jobs:
     name: Compile Android 4.0.4 API 15 APK
     runs-on: ubuntu-22.04
     env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /tmp/android-sdk-legacy
+      ANDROID_SDK_ROOT: /tmp/android-sdk-legacy
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -25,11 +25,14 @@ jobs:
           distribution: zulu
           java-version: "17"
 
-      - name: Install legacy Android SDK packages
+      - name: Install isolated legacy Android SDK
         run: |
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          yes | "$SDKMANAGER" "platform-tools" "platforms;android-25" "build-tools;26.0.2"
+          rm -rf "$ANDROID_HOME"
+          mkdir -p "$ANDROID_HOME"
+          SDKMANAGER="/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-25" "build-tools;26.0.2"
+          find "$ANDROID_HOME" -maxdepth 2 -type d | sort
 
       - name: Set up JDK 8 for legacy Gradle build
         uses: actions/setup-java@v4
@@ -43,4 +46,4 @@ jobs:
           gradle-version: "4.1"
 
       - name: Build legacy debug APK
-        run: gradle -p legacy-android-ics :app:assembleDebug
+        run: gradle -p legacy-android-ics :app:assembleDebug --stacktrace

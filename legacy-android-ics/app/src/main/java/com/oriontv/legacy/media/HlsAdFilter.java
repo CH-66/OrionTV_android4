@@ -130,6 +130,7 @@ public final class HlsAdFilter {
         boolean adBreak = false;
         boolean previousRemoved = false;
         boolean justEndedAdBreak = false;
+        boolean spliceResetRequested = false;
 
         int removedSegments = foreign.removedSegments;
         long removedDurationMs = foreign.removedDurationMs;
@@ -228,7 +229,11 @@ public final class HlsAdFilter {
                 }
                 signature.append(adBreak ? "B|" : "U|").append(trimmed).append('|');
             } else {
-                appendBlock(out, block, previousRemoved || justEndedAdBreak);
+                boolean resetBefore = previousRemoved || justEndedAdBreak;
+                appendBlock(out, block, resetBefore);
+                if (resetBefore) {
+                    spliceResetRequested = true;
+                }
             }
 
             seenSegment = true;
@@ -245,12 +250,19 @@ public final class HlsAdFilter {
         // Stagefright implementations; suppressing that reset can leave audio advancing
         // while video remains stuck on the last pre-ad frame.
         if (collectingBlock && !block.isEmpty()) {
-            appendBlock(out, block, previousRemoved || justEndedAdBreak);
+            boolean resetBefore = previousRemoved || justEndedAdBreak;
+            appendBlock(out, block, resetBefore);
+            if (resetBefore && containsMediaSegment(block)) {
+                spliceResetRequested = true;
+            }
         }
         if (!pending.isEmpty()) {
             appendBlock(out, pending, previousRemoved || justEndedAdBreak);
         }
 
+        if (spliceResetRequested) {
+            diagnostics = appendDiagnostic(diagnostics, "splice-reset");
+        }
         if (uriRemovedSegments > 0) {
             diagnostics = appendDiagnostic(
                     diagnostics, "strong-ad-uri:" + uriRemovedSegments);

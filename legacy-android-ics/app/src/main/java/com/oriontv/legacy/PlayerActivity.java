@@ -12,6 +12,7 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.google.gson.Gson;
@@ -56,7 +57,14 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private TextView durationView;
     private ProgressBar progress;
     private Button playPauseButton;
+    private Button episodeButton;
     private Button sourceButton;
+    private FrameLayout drawerOverlay;
+    private LinearLayout drawerPanel;
+    private TextView drawerTitle;
+    private LinearLayout drawerContent;
+    private View drawerReturnFocus;
+    private boolean drawerVisible;
     private boolean controlsVisible;
 
     private final Runnable hideChrome = new Runnable() {
@@ -146,6 +154,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         buildTopBar();
         buildStatus();
         buildBottomPanel();
+        buildDrawer();
 
         setContentView(playerRoot);
         controller = new LegacyPlayerController(this, surfaceView, this);
@@ -232,13 +241,15 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         playPauseButton = playerButton("播放", true);
         Button forward = playerButton("快进 10秒", false);
         Button next = playerButton("下一集", false);
-        sourceButton = playerButton("切换线路", false);
+        episodeButton = playerButton("选集", false);
+        sourceButton = playerButton("线路", false);
 
         buttons.addView(previous);
         buttons.addView(rewind);
         buttons.addView(playPauseButton);
         buttons.addView(forward);
         buttons.addView(next);
+        buttons.addView(episodeButton);
         buttons.addView(sourceButton);
 
         bottomPanel.addView(progressRow, new LinearLayout.LayoutParams(
@@ -268,9 +279,257 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         next.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { nextEpisode(); }
         });
-        sourceButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { switchSource(); }
+        episodeButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { openEpisodeDrawer(); }
         });
+        sourceButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { openSourceDrawer(); }
+        });
+    }
+
+    private void buildDrawer() {
+        drawerOverlay = new FrameLayout(this);
+        drawerOverlay.setBackgroundColor(0x66000000);
+        drawerOverlay.setVisibility(View.GONE);
+        drawerOverlay.setFocusable(false);
+
+        drawerPanel = new LinearLayout(this);
+        drawerPanel.setOrientation(LinearLayout.VERTICAL);
+        drawerPanel.setPadding(dp(24), dp(24), dp(20), dp(22));
+        drawerPanel.setBackgroundDrawable(roundedBackground(0xf51a1e24, 18, 1, 0x335b6572));
+
+        drawerTitle = new TextView(this);
+        drawerTitle.setTextColor(Color.WHITE);
+        drawerTitle.setTextSize(23);
+        drawerTitle.setSingleLine(true);
+        drawerTitle.setPadding(dp(4), 0, 0, dp(14));
+        drawerPanel.addView(drawerTitle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+
+        TextView hint = new TextView(this);
+        hint.setText("方向键选择  ·  确定进入  ·  返回关闭");
+        hint.setTextColor(0xff89929e);
+        hint.setTextSize(13);
+        hint.setSingleLine(true);
+        hint.setPadding(dp(4), 0, 0, dp(12));
+        drawerPanel.addView(hint, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(34)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setFocusable(false);
+        drawerContent = new LinearLayout(this);
+        drawerContent.setOrientation(LinearLayout.VERTICAL);
+        drawerContent.setPadding(0, dp(2), 0, dp(12));
+        scroll.addView(drawerContent, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        drawerPanel.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(
+                dp(430), FrameLayout.LayoutParams.MATCH_PARENT, Gravity.RIGHT);
+        panelParams.setMargins(0, dp(10), dp(10), dp(10));
+        drawerOverlay.addView(drawerPanel, panelParams);
+
+        playerRoot.addView(drawerOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+    }
+
+    private void openEpisodeDrawer() {
+        if (currentSource == null || currentSource.episodes == null
+                || currentSource.episodes.size() == 0) {
+            showStatus("当前没有可选剧集", true, 1800);
+            return;
+        }
+
+        drawerReturnFocus = episodeButton;
+        drawerTitle.setText("选集  ·  第 " + (episodeIndex + 1) + " 集");
+        drawerContent.removeAllViews();
+
+        final int total = currentSource.episodes.size();
+        final int columns = 5;
+        LinearLayout row = null;
+        Button currentButton = null;
+
+        for (int i = 0; i < total; i++) {
+            if (i % columns == 0) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.LEFT);
+                LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
+                rowParams.setMargins(0, 0, 0, dp(6));
+                drawerContent.addView(row, rowParams);
+            }
+
+            final int index = i;
+            final boolean selected = index == episodeIndex;
+            Button button = drawerItemButton(String.valueOf(index + 1), selected);
+            LinearLayout.LayoutParams itemParams = new LinearLayout.LayoutParams(0, dp(50), 1);
+            itemParams.setMargins(dp(3), dp(2), dp(3), dp(2));
+            row.addView(button, itemParams);
+
+            button.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    if (episodeIndex != index) {
+                        saveRecord(true);
+                        episodeIndex = index;
+                        closeDrawer(false);
+                        playCurrent();
+                    } else {
+                        closeDrawer(true);
+                    }
+                }
+            });
+            if (selected) currentButton = button;
+        }
+
+        if (row != null) {
+            int remainder = total % columns;
+            if (remainder != 0) {
+                for (int i = remainder; i < columns; i++) {
+                    View spacer = new View(this);
+                    row.addView(spacer, new LinearLayout.LayoutParams(0, dp(50), 1));
+                }
+            }
+        }
+
+        showDrawer(currentButton);
+    }
+
+    private void openSourceDrawer() {
+        if (sources == null || sources.size() == 0) {
+            showStatus("当前没有可用线路", true, 1800);
+            return;
+        }
+
+        drawerReturnFocus = sourceButton;
+        drawerTitle.setText("播放线路  ·  " + safeSourceName(currentSource));
+        drawerContent.removeAllViews();
+        Button currentButton = null;
+
+        for (int i = 0; i < sources.size(); i++) {
+            final SearchResult item = sources.get(i);
+            final boolean playable = item != null && item.episodes != null
+                    && item.episodes.size() > episodeIndex;
+            final boolean selected = item == currentSource;
+
+            String label = safeSourceName(item);
+            if (item != null && item.resolution != null && item.resolution.length() > 0) {
+                label += "   ·   " + item.resolution;
+            }
+            if (!playable) label += "   ·   当前集不可用";
+
+            Button button = drawerWideButton(label, selected, playable);
+            drawerContent.addView(button, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+
+            if (playable) {
+                button.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        if (currentSource != item) {
+                            saveRecord(true);
+                            currentSource = item;
+                            closeDrawer(false);
+                            showStatus("正在切换到 " + safeSourceName(item), true, 900);
+                            playCurrent();
+                        } else {
+                            closeDrawer(true);
+                        }
+                    }
+                });
+            }
+            if (selected) currentButton = button;
+        }
+
+        showDrawer(currentButton);
+    }
+
+    private void showDrawer(final Button preferredFocus) {
+        drawerVisible = true;
+        handler.removeCallbacks(hideChrome);
+        handler.removeCallbacks(hideStatus);
+        statusView.setVisibility(View.GONE);
+        topBar.setVisibility(View.GONE);
+        bottomPanel.setVisibility(View.GONE);
+        controlsVisible = false;
+        drawerOverlay.setVisibility(View.VISIBLE);
+        drawerOverlay.bringToFront();
+
+        drawerOverlay.post(new Runnable() {
+            @Override public void run() {
+                if (preferredFocus != null && preferredFocus.isEnabled()) {
+                    preferredFocus.requestFocus();
+                } else if (drawerContent.getChildCount() > 0) {
+                    View first = drawerContent.getChildAt(0);
+                    if (first instanceof ViewGroup && ((ViewGroup) first).getChildCount() > 0) {
+                        ((ViewGroup) first).getChildAt(0).requestFocus();
+                    } else {
+                        first.requestFocus();
+                    }
+                }
+            }
+        });
+    }
+
+    private void closeDrawer(boolean restoreControls) {
+        drawerVisible = false;
+        drawerOverlay.setVisibility(View.GONE);
+        if (restoreControls) {
+            showControls();
+            if (drawerReturnFocus != null) drawerReturnFocus.requestFocus();
+        } else {
+            controlsVisible = false;
+            topBar.setVisibility(View.GONE);
+            bottomPanel.setVisibility(View.GONE);
+        }
+    }
+
+    private Button drawerItemButton(final String text, final boolean selected) {
+        final Button button = new Button(this);
+        button.setText(text);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(16);
+        button.setSingleLine(true);
+        button.setFocusable(true);
+        button.setFocusableInTouchMode(true);
+        button.setBackgroundDrawable(drawerBackground(false, selected));
+        button.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override public void onFocusChange(View v, boolean hasFocus) {
+                button.setBackgroundDrawable(drawerBackground(hasFocus, selected));
+                button.setScaleX(hasFocus ? 1.05f : 1.0f);
+                button.setScaleY(hasFocus ? 1.05f : 1.0f);
+            }
+        });
+        return button;
+    }
+
+    private Button drawerWideButton(final String text, final boolean selected, boolean enabled) {
+        final Button button = drawerItemButton(text, selected);
+        button.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        button.setPadding(dp(18), 0, dp(12), 0);
+        button.setEnabled(enabled);
+        button.setFocusable(enabled);
+        if (!enabled) {
+            button.setTextColor(0xff69727d);
+            button.setBackgroundDrawable(roundedBackground(0x66272c33, 9, 1, 0x223b424b));
+        }
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(54));
+        params.setMargins(0, 0, 0, dp(7));
+        button.setLayoutParams(params);
+        return button;
+    }
+
+    private GradientDrawable drawerBackground(boolean focused, boolean selected) {
+        if (focused) {
+            return roundedBackground(0xff2f80ed, 9, 2, 0xffffffff);
+        }
+        if (selected) {
+            return roundedBackground(0xff253b58, 9, 1, 0xff4d8fe8);
+        }
+        return roundedBackground(0xcc252a31, 9, 1, 0x334f5966);
     }
 
     private Button playerButton(final String text, final boolean primary) {
@@ -354,7 +613,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         titleView.setText(name);
         metaView.setText("第 " + (episodeIndex + 1) + (total > 0 ? " / " + total + " 集" : " 集")
                 + "   ·   " + sourceName);
-        sourceButton.setText(sources.size() > 1 ? "切换线路" : "当前线路");
+        if (episodeButton != null) episodeButton.setText("选集");
+        if (sourceButton != null) sourceButton.setText(sources.size() > 1 ? "线路" : "当前线路");
     }
 
     private String buildPlayableUrl(String originalUrl) {
@@ -377,6 +637,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     }
 
     private void hideControls() {
+        if (drawerVisible) return;
         if (controller != null && !controller.isPlaying()) return;
         controlsVisible = false;
         topBar.setVisibility(View.GONE);
@@ -401,12 +662,18 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         int key = event.getKeyCode();
 
         if (key == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_DOWN) {
-            if (controlsVisible) {
+            if (drawerVisible) {
+                closeDrawer(true);
+            } else if (controlsVisible) {
                 hideControls();
             } else {
                 finish();
             }
             return true;
+        }
+
+        if (drawerVisible && isRemoteNavigationKey(key)) {
+            return super.dispatchKeyEvent(event);
         }
 
         if (isMediaKey(key)) {
@@ -513,26 +780,6 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         } else {
             showStatus("已经是第一集", true, 1800);
         }
-    }
-
-    private void switchSource() {
-        if (sources == null || sources.size() <= 1 || currentSource == null) {
-            showStatus("当前没有其他可用线路", true, 1800);
-            return;
-        }
-
-        int currentIndex = sources.indexOf(currentSource);
-        for (int offset = 1; offset <= sources.size(); offset++) {
-            SearchResult candidate = sources.get((currentIndex + offset + sources.size()) % sources.size());
-            if (candidate != null && candidate.episodes != null && candidate.episodes.size() > episodeIndex) {
-                saveRecord(true);
-                currentSource = candidate;
-                showStatus("正在切换到 " + safeSourceName(candidate), true, 1400);
-                playCurrent();
-                return;
-            }
-        }
-        showStatus("没有其他线路包含当前集", true, 2000);
     }
 
     private String safeSourceName(SearchResult item) {

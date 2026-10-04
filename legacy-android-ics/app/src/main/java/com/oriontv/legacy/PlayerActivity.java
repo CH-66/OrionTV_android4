@@ -312,7 +312,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(dp(22), dp(14), dp(22), dp(14));
-        card.setBackgroundDrawable(roundedBackground(0xe61a1e24, 14, 1, 0x334e5966));
+        card.setBackgroundDrawable(roundedBackground(0xe618211c, 14, 1, 0x333c5144));
 
         bufferingSpinner = new ProgressBar(this);
         bufferingSpinner.setIndeterminate(true);
@@ -356,7 +356,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         bottomPanel = new LinearLayout(this);
         bottomPanel.setOrientation(LinearLayout.VERTICAL);
         bottomPanel.setPadding(dp(18), dp(8), dp(18), dp(10));
-        bottomPanel.setBackgroundDrawable(roundedBackground(0xd91a1e24, 14, 1, 0x223f4956));
+        bottomPanel.setBackgroundDrawable(roundedBackground(0xd918211c, 14, 1, 0x22344a3b));
 
         LinearLayout progressRow = new LinearLayout(this);
         progressRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -367,6 +367,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
         progress = new SeekBar(this);
         progress.setId(ID_PROGRESS);
+        progress.setProgressDrawable(getResources().getDrawable(R.drawable.seekbar_progress_green));
+        progress.setThumb(getResources().getDrawable(R.drawable.seekbar_thumb_green));
         progress.setMax(1000);
         progress.setProgress(0);
         progress.setFocusable(true);
@@ -431,7 +433,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         progressRow.addView(durationView, new LinearLayout.LayoutParams(dp(62), dp(26)));
 
         cacheStatusView = new TextView(this);
-        cacheStatusView.setTextColor(0xffaeb9c8);
+        cacheStatusView.setTextColor(0xffa4b2a9);
         cacheStatusView.setTextSize(scaledSp(11));
         cacheStatusView.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         cacheStatusView.setSingleLine(true);
@@ -621,7 +623,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         card.setOrientation(LinearLayout.VERTICAL);
         card.setGravity(Gravity.CENTER_HORIZONTAL);
         card.setPadding(dp(34), dp(28), dp(34), dp(28));
-        card.setBackgroundDrawable(roundedBackground(0xf21a1e24, 18, 1, 0x445f6a78));
+        card.setBackgroundDrawable(roundedBackground(0xf218211c, 18, 1, 0x44425c4b));
 
         TextView heading = new TextView(this);
         heading.setText("继续观看？");
@@ -718,7 +720,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         card.setOrientation(LinearLayout.VERTICAL);
         card.setGravity(Gravity.CENTER_HORIZONTAL);
         card.setPadding(dp(34), dp(28), dp(34), dp(28));
-        card.setBackgroundDrawable(roundedBackground(0xf51a1e24, 18, 1, 0x555f6a78));
+        card.setBackgroundDrawable(roundedBackground(0xf518211c, 18, 1, 0x55516b59));
 
         TextView heading = new TextView(this);
         heading.setText("播放失败");
@@ -822,7 +824,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         card.setOrientation(LinearLayout.VERTICAL);
         card.setGravity(Gravity.CENTER_HORIZONTAL);
         card.setPadding(dp(30), dp(24), dp(30), dp(24));
-        card.setBackgroundDrawable(roundedBackground(0xf21a1e24, 18, 1, 0x445f6a78));
+        card.setBackgroundDrawable(roundedBackground(0xf218211c, 18, 1, 0x44425c4b));
 
         TextView heading = new TextView(this);
         heading.setText("本集播放结束");
@@ -921,7 +923,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         drawerPanel = new LinearLayout(this);
         drawerPanel.setOrientation(LinearLayout.VERTICAL);
         drawerPanel.setPadding(dp(24), dp(24), dp(20), dp(22));
-        drawerPanel.setBackgroundDrawable(roundedBackground(0xf51a1e24, 18, 1, 0x335b6572));
+        drawerPanel.setBackgroundDrawable(roundedBackground(0xf518211c, 18, 1, 0x33495f50));
 
         drawerTitle = new TextView(this);
         drawerTitle.setTextColor(Color.WHITE);
@@ -1214,12 +1216,12 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
     private GradientDrawable drawerBackground(boolean focused, boolean selected) {
         if (focused) {
-            return roundedBackground(0xff2f80ed, 9, 2, 0xffffffff);
+            return roundedBackground(0xff22c55e, 9, 2, 0xffffffff);
         }
         if (selected) {
-            return roundedBackground(0xff253b58, 9, 1, 0xff4d8fe8);
+            return roundedBackground(0xff203a2b, 9, 1, 0xff34d17a);
         }
-        return roundedBackground(0xcc252a31, 9, 1, 0x334f5966);
+        return roundedBackground(0xcc18231d, 9, 1, 0x33354a3d);
     }
 
     private Button playerButton(final String text, final boolean primary) {
@@ -1269,9 +1271,9 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
     private GradientDrawable buttonBackground(boolean focused, boolean primary) {
         if (focused) {
-            return roundedBackground(primary ? 0xff2f80ed : 0xff343b45, 9, 2, 0xffffffff);
+            return roundedBackground(primary ? 0xff22c55e : 0xff203a2b, 9, 2, 0xffffffff);
         }
-        return roundedBackground(primary ? 0xff2468c7 : 0xcc252a31, 9, 1, 0x334f5966);
+        return roundedBackground(primary ? 0xff178a45 : 0xcc18231d, 9, 1, 0x33354a3d);
     }
 
     private int dp(int value) {

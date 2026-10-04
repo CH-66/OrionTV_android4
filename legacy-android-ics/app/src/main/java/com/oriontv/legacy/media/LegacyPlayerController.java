@@ -163,7 +163,8 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         mediaPlayer.setOnVideoSizeChangedListener(new MediaPlayer.OnVideoSizeChangedListener() {
             @Override
             public void onVideoSizeChanged(MediaPlayer mp, int width, int height) {
-                Log.d(TAG, "system videoSize=" + width + "x" + height);\n                listener.onVideoSizeChanged(width, height);
+                Log.d(TAG, "system videoSize=" + width + "x" + height);
+                listener.onVideoSizeChanged(width, height);
             }
         });
 

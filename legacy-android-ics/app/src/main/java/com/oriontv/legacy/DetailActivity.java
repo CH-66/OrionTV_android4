@@ -3,16 +3,18 @@ package com.oriontv.legacy;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.KeyEvent;
+import android.widget.AbsListView;
 import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
+import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.GridView;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.google.gson.Gson;
@@ -37,12 +39,13 @@ public class DetailActivity extends BaseActivity {
     private final Handler handler = new Handler();
     private LinearLayout sourceRow;
     private GridView episodeGrid;
-    private ArrayAdapter<String> episodeAdapter;
+    private EpisodeAdapter episodeAdapter;
     private TextView status;
     private TextView titleView;
     private ImageView posterView;
     private Button favoriteButton;
     private SearchResult selected;
+    private View selectedEpisodeView;
     private String query;
     private String preferredSource;
     private String preferredId;
@@ -61,51 +64,100 @@ public class DetailActivity extends BaseActivity {
     }
 
     private void buildUi() {
-        ScrollView scroll = new ScrollView(this);
         LinearLayout root = Ui.vertical(this);
-        scroll.addView(root);
 
         LinearLayout header = Ui.row(this);
+        header.setGravity(Gravity.TOP);
+
         posterView = new ImageView(this);
         posterView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        header.addView(posterView, new LinearLayout.LayoutParams(Ui.dp(this, 180), Ui.dp(this, 240)));
+        posterView.setImageResource(R.drawable.poster_placeholder);
+        posterView.setBackgroundResource(R.drawable.focus_panel);
+        posterView.setPadding(Ui.dp(this, 4), Ui.dp(this, 4),
+                Ui.dp(this, 4), Ui.dp(this, 4));
+        header.addView(posterView, new LinearLayout.LayoutParams(
+                Ui.dp(this, 190), Ui.dp(this, 285)));
 
-        LinearLayout meta = Ui.vertical(this);
-        meta.setPadding(Ui.dp(this, 18), 0, 0, 0);
+        LinearLayout meta = new LinearLayout(this);
+        meta.setOrientation(LinearLayout.VERTICAL);
+        meta.setPadding(Ui.dp(this, 22), Ui.dp(this, 6), 0, 0);
         titleView = Ui.title(this, query == null ? "" : query);
         status = Ui.muted(this, "正在加载播放源", 16);
         favoriteButton = Ui.button(this, "收藏");
         Button play = Ui.button(this, "播放第一集");
         meta.addView(titleView);
         meta.addView(status);
-        meta.addView(Ui.spacer(this, 1, 10));
+        meta.addView(Ui.spacer(this, 1, 14));
+
         LinearLayout actions = Ui.row(this);
-        actions.addView(play, new LinearLayout.LayoutParams(Ui.dp(this, 130), Ui.dp(this, 48)));
+        actions.addView(play, new LinearLayout.LayoutParams(
+                Ui.dp(this, 150), Ui.dp(this, 44)));
         actions.addView(Ui.spacer(this, 12, 1));
-        actions.addView(favoriteButton, new LinearLayout.LayoutParams(Ui.dp(this, 110), Ui.dp(this, 48)));
+        actions.addView(favoriteButton, new LinearLayout.LayoutParams(
+                Ui.dp(this, 120), Ui.dp(this, 44)));
         meta.addView(actions);
-        header.addView(meta, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        root.addView(header);
 
-        root.addView(Ui.muted(this, "播放源", 16));
+        header.addView(meta, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
+        root.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 285)));
+
+        root.addView(Ui.sectionTitle(this, "播放源"));
+
+        HorizontalScrollView sourceScroll = new HorizontalScrollView(this);
+        sourceScroll.setHorizontalScrollBarEnabled(false);
+        sourceScroll.setFillViewport(false);
         sourceRow = Ui.row(this);
-        root.addView(sourceRow);
+        sourceScroll.addView(sourceRow, new HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(sourceScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 48)));
 
-        root.addView(Ui.muted(this, "剧集", 16));
+        root.addView(Ui.sectionTitle(this, "选集"));
+
         episodeGrid = new GridView(this);
-        episodeGrid.setNumColumns(6);
+        episodeGrid.setNumColumns(8);
         episodeGrid.setHorizontalSpacing(Ui.dp(this, 8));
         episodeGrid.setVerticalSpacing(Ui.dp(this, 8));
+        episodeGrid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
+        episodeGrid.setSelector(android.R.color.transparent);
+        episodeGrid.setDrawSelectorOnTop(false);
+        episodeGrid.setVerticalScrollBarEnabled(false);
+        episodeGrid.setScrollingCacheEnabled(false);
         episodeGrid.setFocusable(true);
         episodeGrid.setFocusableInTouchMode(false);
         episodeGrid.setChoiceMode(GridView.CHOICE_MODE_SINGLE);
-        episodeGrid.setDrawSelectorOnTop(true);
-        episodeAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, new ArrayList<String>());
+
+        episodeAdapter = new EpisodeAdapter();
         episodeGrid.setAdapter(episodeAdapter);
         episodeGrid.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 openPlayer(position);
+            }
+        });
+        episodeGrid.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (selectedEpisodeView != null && selectedEpisodeView != view) {
+                    selectedEpisodeView.setSelected(false);
+                    selectedEpisodeView.setActivated(false);
+                }
+                if (view != null) {
+                    view.setSelected(true);
+                    view.setActivated(true);
+                    selectedEpisodeView = view;
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                if (selectedEpisodeView != null) {
+                    selectedEpisodeView.setSelected(false);
+                    selectedEpisodeView.setActivated(false);
+                    selectedEpisodeView = null;
+                }
             }
         });
         episodeGrid.setOnKeyListener(new View.OnKeyListener() {
@@ -123,7 +175,9 @@ public class DetailActivity extends BaseActivity {
                 return false;
             }
         });
-        root.addView(episodeGrid, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 360)));
+
+        root.addView(episodeGrid, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
         play.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -138,7 +192,7 @@ public class DetailActivity extends BaseActivity {
             }
         });
 
-        setContentView(scroll);
+        setContentView(root);
     }
 
     private void loadSources() {
@@ -246,14 +300,15 @@ public class DetailActivity extends BaseActivity {
             final SearchResult source = sources.get(i);
             String label = source.source_name == null ? source.source : source.source_name;
             if (source.resolution != null) label += " " + source.resolution;
-            Button button = Ui.button(this, label);
+            Button button = Ui.tabButton(this, label);
+            button.setSelected(source == selected);
             button.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     selectSource(source);
                 }
             });
-            sourceRow.addView(button, new LinearLayout.LayoutParams(Ui.dp(this, 150), Ui.dp(this, 46)));
+            sourceRow.addView(button, new LinearLayout.LayoutParams(Ui.dp(this, 160), Ui.dp(this, 42)));
             sourceRow.addView(Ui.spacer(this, 8, 1));
         }
     }
@@ -262,18 +317,27 @@ public class DetailActivity extends BaseActivity {
         selected = source;
         titleView.setText(source.title);
         if (source.poster != null && source.poster.length() > 0) {
-            app.api().loadImage(app.api().imageProxyUrl(source.poster), posterView, R.drawable.poster_placeholder);
+            app.api().loadImage(
+                    app.api().imageProxyUrl(source.poster),
+                    posterView,
+                    R.drawable.poster_placeholder,
+                    Ui.dp(this, 190),
+                    Ui.dp(this, 285));
         } else {
+            app.api().cancelImage(posterView);
             posterView.setImageResource(R.drawable.poster_placeholder);
         }
-        episodeAdapter.clear();
-        if (source.episodes != null) {
-            for (int i = 0; i < source.episodes.size(); i++) {
-                episodeAdapter.add("第" + (i + 1) + "集");
-            }
+
+        int episodeCount = source.episodes == null ? 0 : source.episodes.size();
+        selectedEpisodeView = null;
+        episodeAdapter.setEpisodeCount(episodeCount);
+        if (episodeCount > 0) {
+            episodeGrid.setSelection(0);
+            episodeGrid.setItemChecked(0, true);
         }
-        episodeAdapter.notifyDataSetChanged();
+
         updateFavoriteButton();
+        renderSources();
     }
 
     private void updateFavoriteButton() {
@@ -322,6 +386,53 @@ public class DetailActivity extends BaseActivity {
         intent.putExtra("year", selected.year);
         intent.putExtra("episode_index", episodeIndex);
         startActivity(intent);
+    }
+
+    private class EpisodeAdapter extends BaseAdapter {
+        private int episodeCount;
+
+        void setEpisodeCount(int count) {
+            episodeCount = Math.max(0, count);
+            notifyDataSetChanged();
+        }
+
+        @Override
+        public int getCount() {
+            return episodeCount;
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return "第" + (position + 1) + "集";
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            TextView view;
+            if (convertView instanceof TextView) {
+                view = (TextView) convertView;
+            } else {
+                view = new TextView(DetailActivity.this);
+                view.setTextColor(getResources().getColor(R.color.orion_text));
+                view.setTextSize(15);
+                view.setGravity(Gravity.CENTER);
+                view.setSingleLine(true);
+                view.setFocusable(false);
+                view.setBackgroundResource(R.drawable.episode_focus);
+                view.setPadding(Ui.dp(DetailActivity.this, 6), 0,
+                        Ui.dp(DetailActivity.this, 6), 0);
+                view.setLayoutParams(new AbsListView.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        Ui.dp(DetailActivity.this, 44)));
+            }
+            view.setText("第" + (position + 1) + "集");
+            return view;
+        }
     }
 
     private static class EmptyMutation implements ApiCallback<MutationResult> {

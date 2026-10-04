@@ -83,7 +83,7 @@ public final class LegacyPosterLoader {
                 .readTimeout(15, TimeUnit.SECONDS)
                 .writeTimeout(15, TimeUnit.SECONDS)
                 .build();
-        this.cacheDir = new File(appContext.getCacheDir(), "poster-cache-v2");
+        this.cacheDir = new File(appContext.getCacheDir(), "poster-cache-v3");
         if (!cacheDir.exists()) {
             cacheDir.mkdirs();
         }

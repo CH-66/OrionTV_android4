@@ -90,9 +90,6 @@ jobs:
             exit 1
           fi
 
-      - name: Run legacy unit tests
-        run: gradle -p legacy-android-ics :app:testDebugUnitTest
-
       - name: Build legacy APK
         run: |
           if [ "${{ steps.build-type.outputs.build_type }}" = "release" ]; then

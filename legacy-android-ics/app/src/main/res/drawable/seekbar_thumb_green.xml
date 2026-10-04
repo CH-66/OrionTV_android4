@@ -1,0 +1,15 @@
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="oval">
+            <solid android:color="@color/orion_focus" />
+            <stroke android:width="2dp" android:color="#E8FFF0" />
+            <size android:width="16dp" android:height="16dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@color/orion_accent" />
+            <size android:width="12dp" android:height="12dp" />
+        </shape>
+    </item>
+</selector>

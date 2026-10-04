@@ -30,6 +30,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     private boolean prepared;
     private boolean lifecyclePaused;
     private boolean resumeAfterLifecyclePause;
+    private boolean playWhenReady = true;
     private boolean destroyed;
     private int generation;
     private final android.os.Handler handler = new android.os.Handler();
@@ -62,6 +63,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         pendingUrl = url;
         lifecyclePaused = false;
         resumeAfterLifecyclePause = false;
+        playWhenReady = true;
 
         // Invalidate the previous player immediately. If the Surface is temporarily absent,
         // keeping the old MediaPlayer alive would let surfaceCreated() reattach the old video.
@@ -78,10 +80,13 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         try {
             if (mediaPlayer.isPlaying()) {
                 mediaPlayer.pause();
+                playWhenReady = false;
             } else {
                 mediaPlayer.start();
+                playWhenReady = true;
             }
-            Log.d(TAG, "playPause system playing=" + mediaPlayer.isPlaying());
+            Log.d(TAG, "playPause system playing=" + mediaPlayer.isPlaying()
+                    + " playWhenReady=" + playWhenReady);
             return true;
         } catch (RuntimeException e) {
             Log.e(TAG, "playPause failed", e);
@@ -156,18 +161,14 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         if (destroyed) return;
         lifecyclePaused = true;
 
+        resumeAfterLifecyclePause = playWhenReady;
         if (mediaPlayer != null && prepared) {
             try {
-                resumeAfterLifecyclePause = mediaPlayer.isPlaying();
-                if (resumeAfterLifecyclePause) {
+                if (mediaPlayer.isPlaying()) {
                     mediaPlayer.pause();
                 }
             } catch (RuntimeException ignored) {
-                resumeAfterLifecyclePause = false;
             }
-        } else {
-            // A pending prepare is expected to auto-start once the Activity is active again.
-            resumeAfterLifecyclePause = mediaPlayer != null || pendingUrl != null;
         }
     }
 
@@ -176,7 +177,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         lifecyclePaused = false;
 
         if (mediaPlayer != null && prepared) {
-            if (resumeAfterLifecyclePause && surfaceReady) {
+            if (playWhenReady && resumeAfterLifecyclePause && surfaceReady) {
                 try {
                     mediaPlayer.start();
                     resumeAfterLifecyclePause = false;
@@ -198,6 +199,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         destroyed = true;
         lifecyclePaused = false;
         resumeAfterLifecyclePause = false;
+        playWhenReady = false;
         releaseMediaPlayer(true);
         try {
             surfaceView.getHolder().removeCallback(this);
@@ -274,9 +276,9 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
                 Log.d(TAG, "system onPrepared generation=" + token
                         + " duration=" + mp.getDuration()
                         + " video=" + mp.getVideoWidth() + "x" + mp.getVideoHeight());
-                if (!lifecyclePaused && surfaceReady) {
+                if (playWhenReady && !lifecyclePaused && surfaceReady) {
                     mp.start();
-                } else {
+                } else if (playWhenReady) {
                     resumeAfterLifecyclePause = true;
                 }
                 listener.onPrepared(mp.getDuration());
@@ -315,6 +317,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
             public void onCompletion(MediaPlayer mp) {
                 if (!isCurrent(mp, token)) return;
                 Log.d(TAG, "system onCompletion generation=" + token);
+                playWhenReady = false;
                 listener.onCompleted();
             }
         });
@@ -328,6 +331,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
                     return true;
                 }
                 prepared = false;
+                playWhenReady = false;
                 Log.e(TAG, "system onError generation=" + token
                         + " what=" + what + " extra=" + extra + " url=" + pendingUrl);
                 listener.onError("System player error " + what + "/" + extra);
@@ -359,7 +363,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         if (mediaPlayer != null) {
             try {
                 mediaPlayer.setDisplay(holder);
-                if (prepared && !lifecyclePaused && resumeAfterLifecyclePause) {
+                if (prepared && playWhenReady && !lifecyclePaused && resumeAfterLifecyclePause) {
                     mediaPlayer.start();
                     resumeAfterLifecyclePause = false;
                 }
@@ -379,12 +383,12 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     public void surfaceDestroyed(SurfaceHolder holder) {
         surfaceReady = false;
         if (mediaPlayer != null) {
-            if (prepared) {
+            if (prepared && playWhenReady) {
                 try {
                     if (mediaPlayer.isPlaying()) {
                         mediaPlayer.pause();
-                        resumeAfterLifecyclePause = true;
                     }
+                    resumeAfterLifecyclePause = true;
                 } catch (RuntimeException ignored) {
                 }
             }

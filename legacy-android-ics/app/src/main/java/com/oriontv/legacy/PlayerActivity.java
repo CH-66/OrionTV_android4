@@ -25,6 +25,7 @@ import com.oriontv.legacy.api.models.PlayerSettings;
 import com.oriontv.legacy.api.models.SearchResult;
 import com.oriontv.legacy.data.LocalRepository;
 import com.oriontv.legacy.media.LegacyPlayerController;
+import com.oriontv.legacy.media.PlaybackProxyServer;
 import com.oriontv.legacy.media.PlaybackSourceSelector;
 import com.oriontv.legacy.net.LegacyHttpCompat;
 
@@ -79,6 +80,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private TextView statusView;
     private TextView currentTimeView;
     private TextView durationView;
+    private TextView cacheStatusView;
     private SeekBar progress;
     private FrameLayout playbackStateOverlay;
     private ProgressBar bufferingSpinner;
@@ -120,6 +122,14 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         @Override
         public void run() {
             if (statusView != null) statusView.setVisibility(View.GONE);
+        }
+    };
+
+    private final Runnable cacheStatsTicker = new Runnable() {
+        @Override
+        public void run() {
+            updateCacheProgress();
+            handler.postDelayed(this, 500);
         }
     };
 
@@ -168,6 +178,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     @Override
     protected void onPause() {
         saveRecord(true);
+        handler.removeCallbacks(cacheStatsTicker);
         if (controller != null) controller.release();
         super.onPause();
     }
@@ -238,6 +249,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
         setContentView(playerRoot);
         controller = new LegacyPlayerController(this, surfaceView, this);
+        handler.removeCallbacks(cacheStatsTicker);
+        handler.post(cacheStatsTicker);
 
         controlsVisible = true;
         showControls();
@@ -414,6 +427,14 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         progressRow.addView(progress, progressParams);
         progressRow.addView(durationView, new LinearLayout.LayoutParams(dp(72), dp(30)));
 
+        cacheStatusView = new TextView(this);
+        cacheStatusView.setTextColor(0xff8fa2b8);
+        cacheStatusView.setTextSize(scaledSp(12));
+        cacheStatusView.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        cacheStatusView.setSingleLine(true);
+        cacheStatusView.setVisibility(View.GONE);
+        cacheStatusView.setPadding(dp(4), 0, dp(4), 0);
+
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
         buttons.setGravity(Gravity.CENTER);
@@ -450,12 +471,14 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
         bottomPanel.addView(progressRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+        bottomPanel.addView(cacheStatusView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(22)));
         bottomPanel.addView(buttons, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
 
         FrameLayout.LayoutParams bottomParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                dp(138),
+                dp(160),
                 Gravity.BOTTOM);
         bottomParams.setMargins(dp(18), 0, dp(18), dp(16));
         playerRoot.addView(bottomPanel, bottomParams);
@@ -1263,6 +1286,12 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         showPlaybackState("正在连接播放线路…", true);
 
         String originalUrl = currentSource.episodes.get(episodeIndex);
+        app.playbackProxy().resetPlaybackStats();
+        if (cacheStatusView != null) {
+            cacheStatusView.setVisibility(View.GONE);
+            cacheStatusView.setText("");
+        }
+        progress.setSecondaryProgress(0);
         controller.load(buildPlayableUrl(originalUrl));
     }
 
@@ -1283,17 +1312,80 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
     private String buildPlayableUrl(String originalUrl) {
         if (originalUrl == null || originalUrl.length() == 0) return originalUrl;
+
+        String upstream = originalUrl;
         if (originalUrl.toLowerCase().startsWith("https://")) {
             try {
-                return VIDEO_PROXY_BASE + "?u=" + URLEncoder.encode(originalUrl, "UTF-8")
+                upstream = VIDEO_PROXY_BASE + "?u=" + URLEncoder.encode(originalUrl, "UTF-8")
                         + "&k=" + URLEncoder.encode(VIDEO_PROXY_TOKEN, "UTF-8");
             } catch (UnsupportedEncodingException ignored) {
+                upstream = originalUrl;
             }
         }
-        return originalUrl;
+
+        String lower = upstream.toLowerCase();
+        if (lower.startsWith("http://") || lower.startsWith("https://")) {
+            return app.playbackProxy().proxyUrl(upstream);
+        }
+        return upstream;
+    }
+
+    private void updateCacheProgress() {
+        if (cacheStatusView == null || progress == null || app == null) return;
+
+        PlaybackProxyServer.CacheStats stats = app.playbackProxy().cacheStats();
+        if (stats == null || !stats.enabled || stats.totalSegments <= 0) {
+            cacheStatusView.setVisibility(View.GONE);
+            return;
+        }
+
+        int secondary = stats.bufferedUntilPermille;
+        if (secondary < progress.getProgress()) {
+            secondary = progress.getProgress();
+        }
+        if (secondary > 1000) secondary = 1000;
+        progress.setSecondaryProgress(secondary);
+
+        StringBuilder text = new StringBuilder();
+        if (stats.lookAheadTarget > 0) {
+            text.append("预缓存 ")
+                    .append(stats.lookAheadReady)
+                    .append("/")
+                    .append(stats.lookAheadTarget)
+                    .append(" · ")
+                    .append(stats.lookAheadPercent)
+                    .append("%");
+        } else {
+            text.append("缓存就绪");
+        }
+
+        text.append(" · ").append(formatCacheBytes(stats.cachedBytes));
+
+        if (stats.prefetchingSegments > 0) {
+            text.append(" · 缓存中 ").append(stats.prefetchingSegments);
+        }
+
+        if (stats.totalSegments > 0 && stats.currentSegmentIndex >= 0) {
+            text.append(" · ")
+                    .append(stats.currentSegmentIndex + 1)
+                    .append("/")
+                    .append(stats.totalSegments);
+        }
+
+        cacheStatusView.setText(text.toString());
+        cacheStatusView.setVisibility(View.VISIBLE);
+    }
+
+    private String formatCacheBytes(long bytes) {
+        if (bytes < 1024L) return bytes + " B";
+        if (bytes < 1024L * 1024L) {
+            return String.format("%.1f KB", bytes / 1024.0);
+        }
+        return String.format("%.1f MB", bytes / 1024.0 / 1024.0);
     }
 
     private void showControls() {
+        updateCacheProgress();
         controlsVisible = true;
         topBar.setVisibility(View.VISIBLE);
         bottomPanel.setVisibility(View.VISIBLE);

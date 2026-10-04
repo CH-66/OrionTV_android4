@@ -388,6 +388,14 @@ public final class HlsAdFilter {
             if (prev.units.size() < 2 || next.units.size() < 2) continue;
             if (!isShortAdRun(mid, MAX_MIDROLL_MS, MAX_MIDROLL_SEGMENTS)) continue;
 
+            boolean discontinuityBounded = mid.discontinuityBefore
+                    && next.discontinuityBefore;
+            boolean dominantHostSandwich = dominantHost != null
+                    && sameHost(prev.host, dominantHost)
+                    && dominantCount * 100 >= total * 65
+                    && mid.durationMs <= MAX_BOUNDARY_ROLL_WITHOUT_DISCONTINUITY_MS;
+            if (!discontinuityBounded && !dominantHostSandwich) continue;
+
             int[] result = markRunDropped(mid, signature, "M");
             removed += result[0];
             removedMs += result[1];

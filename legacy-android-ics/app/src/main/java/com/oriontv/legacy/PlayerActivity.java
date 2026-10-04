@@ -13,6 +13,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 
 import com.google.gson.Gson;
@@ -68,7 +69,14 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private TextView statusView;
     private TextView currentTimeView;
     private TextView durationView;
-    private ProgressBar progress;
+    private SeekBar progress;
+    private FrameLayout playbackStateOverlay;
+    private ProgressBar bufferingSpinner;
+    private TextView playbackStateText;
+    private FrameLayout nextEpisodeOverlay;
+    private TextView nextEpisodeText;
+    private boolean nextEpisodePromptVisible;
+    private int nextEpisodeCountdown;
     private Button playPauseButton;
     private Button rewindButton;
     private Button forwardButton;
@@ -109,6 +117,24 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             if (controller != null && controller.seekTo(target)) {
                 showStatus("已跳转至 " + formatTime(target), false, 900);
             }
+        }
+    };
+
+    private final Runnable nextEpisodeTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!nextEpisodePromptVisible) return;
+            if (nextEpisodeCountdown <= 0) {
+                hideNextEpisodePrompt();
+                nextEpisode();
+                return;
+            }
+            if (nextEpisodeText != null) {
+                nextEpisodeText.setText("即将播放第 " + (episodeIndex + 2)
+                        + " 集  ·  " + nextEpisodeCountdown + " 秒后自动播放");
+            }
+            nextEpisodeCountdown--;
+            handler.postDelayed(this, 1000);
         }
     };
 
@@ -187,9 +213,11 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
         buildTopBar();
         buildStatus();
+        buildPlaybackStateOverlay();
         buildBottomPanel();
         buildDrawer();
         buildResumeOverlay();
+        buildNextEpisodeOverlay();
 
         setContentView(playerRoot);
         controller = new LegacyPlayerController(this, surfaceView, this);
@@ -243,6 +271,55 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         playerRoot.addView(statusView, params);
     }
 
+    private void buildPlaybackStateOverlay() {
+        playbackStateOverlay = new FrameLayout(this);
+        playbackStateOverlay.setVisibility(View.GONE);
+        playbackStateOverlay.setFocusable(false);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(22), dp(14), dp(22), dp(14));
+        card.setBackgroundDrawable(roundedBackground(0xe61a1e24, 14, 1, 0x334e5966));
+
+        bufferingSpinner = new ProgressBar(this);
+        bufferingSpinner.setIndeterminate(true);
+        LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(dp(30), dp(30));
+        spinnerParams.setMargins(0, 0, dp(14), 0);
+        card.addView(bufferingSpinner, spinnerParams);
+
+        playbackStateText = new TextView(this);
+        playbackStateText.setTextColor(Color.WHITE);
+        playbackStateText.setTextSize(18);
+        playbackStateText.setSingleLine(true);
+        card.addView(playbackStateText, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(42)));
+
+        playbackStateOverlay.addView(card, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER));
+
+        playerRoot.addView(playbackStateOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+    }
+
+    private void showPlaybackState(String text, boolean loading) {
+        if (playbackStateOverlay == null) return;
+        playbackStateText.setText(text);
+        bufferingSpinner.setVisibility(loading ? View.VISIBLE : View.GONE);
+        playbackStateOverlay.setVisibility(View.VISIBLE);
+        playbackStateOverlay.bringToFront();
+        if (drawerVisible) drawerOverlay.bringToFront();
+        if (resumePromptVisible) resumeOverlay.bringToFront();
+        if (nextEpisodePromptVisible) nextEpisodeOverlay.bringToFront();
+    }
+
+    private void hidePlaybackState() {
+        if (playbackStateOverlay != null) playbackStateOverlay.setVisibility(View.GONE);
+    }
+
     private void buildBottomPanel() {
         bottomPanel = new LinearLayout(this);
         bottomPanel.setOrientation(LinearLayout.VERTICAL);
@@ -256,12 +333,65 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         currentTimeView = timeText("00:00", Gravity.LEFT);
         durationView = timeText("--:--", Gravity.RIGHT);
 
-        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress = new SeekBar(this);
         progress.setMax(1000);
         progress.setProgress(0);
+        progress.setFocusable(true);
+        progress.setFocusableInTouchMode(true);
+        progress.setKeyProgressIncrement(20);
+        progress.setPadding(dp(4), 0, dp(4), 0);
+        progress.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override public void onFocusChange(View v, boolean hasFocus) {
+                progress.setScaleY(hasFocus ? 1.25f : 1.0f);
+                if (hasFocus) scheduleHideControls();
+            }
+        });
+        progress.setOnKeyListener(new View.OnKeyListener() {
+            @Override public boolean onKey(View v, int keyCode, KeyEvent event) {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    previewSeekBy(-seekStepMs);
+                    scheduleHideControls();
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    previewSeekBy(seekStepMs);
+                    scheduleHideControls();
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                    if (seekPreviewActive) {
+                        handler.removeCallbacks(commitSeekPreview);
+                        commitSeekPreview.run();
+                    }
+                    return true;
+                }
+                return false;
+            }
+        });
+        progress.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int value, boolean fromUser) {
+                if (!fromUser || controller == null || !controller.isPrepared()) return;
+                int durationMs = controller.duration();
+                if (durationMs <= 0) return;
+                seekPreviewBaseMs = controller.position();
+                seekPreviewPositionMs = (int) ((value * (long) durationMs) / 1000L);
+                seekPreviewActive = true;
+                currentTimeView.setText(formatTime(seekPreviewPositionMs));
+                showStatus("定位到 " + formatTime(seekPreviewPositionMs)
+                        + " / " + formatTime(durationMs), false, 0);
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                if (seekPreviewActive) {
+                    handler.removeCallbacks(commitSeekPreview);
+                    commitSeekPreview.run();
+                }
+            }
+        });
 
         progressRow.addView(currentTimeView, new LinearLayout.LayoutParams(dp(72), dp(30)));
-        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(0, dp(12), 1);
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(0, dp(30), 1);
         progressParams.setMargins(dp(12), 0, dp(12), 0);
         progressRow.addView(progress, progressParams);
         progressRow.addView(durationView, new LinearLayout.LayoutParams(dp(72), dp(30)));
@@ -290,13 +420,13 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         buttons.addView(settingsButton);
 
         bottomPanel.addView(progressRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
         bottomPanel.addView(buttons, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
 
         FrameLayout.LayoutParams bottomParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                dp(126),
+                dp(138),
                 Gravity.BOTTOM);
         bottomParams.setMargins(dp(18), 0, dp(18), dp(16));
         playerRoot.addView(bottomPanel, bottomParams);
@@ -468,6 +598,105 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private void hideResumePrompt() {
         resumePromptVisible = false;
         resumeOverlay.setVisibility(View.GONE);
+    }
+
+    private void buildNextEpisodeOverlay() {
+        nextEpisodeOverlay = new FrameLayout(this);
+        nextEpisodeOverlay.setBackgroundColor(0x88000000);
+        nextEpisodeOverlay.setVisibility(View.GONE);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.setPadding(dp(30), dp(24), dp(30), dp(24));
+        card.setBackgroundDrawable(roundedBackground(0xf21a1e24, 18, 1, 0x445f6a78));
+
+        TextView heading = new TextView(this);
+        heading.setText("本集播放结束");
+        heading.setTextColor(Color.WHITE);
+        heading.setTextSize(24);
+        heading.setGravity(Gravity.CENTER);
+        card.addView(heading, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+
+        nextEpisodeText = new TextView(this);
+        nextEpisodeText.setTextColor(0xffc1c8d2);
+        nextEpisodeText.setTextSize(16);
+        nextEpisodeText.setGravity(Gravity.CENTER);
+        card.addView(nextEpisodeText, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(54)));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER);
+        final Button playNow = playerButton("立即下一集", true);
+        final Button cancel = playerButton("取消", false);
+        actions.addView(playNow);
+        actions.addView(cancel);
+        card.addView(actions, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(54)));
+
+        playNow.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                hideNextEpisodePrompt();
+                nextEpisode();
+            }
+        });
+        cancel.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                hideNextEpisodePrompt();
+                showControls();
+                playPauseButton.requestFocus();
+                showStatus("已停止自动连播", true, 1800);
+            }
+        });
+
+        nextEpisodeOverlay.addView(card, new FrameLayout.LayoutParams(
+                dp(500), dp(210), Gravity.CENTER));
+        playerRoot.addView(nextEpisodeOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+    }
+
+    private void showNextEpisodePrompt() {
+        if (currentSource == null || currentSource.episodes == null
+                || episodeIndex >= currentSource.episodes.size() - 1) {
+            showPlaybackState("播放完毕", false);
+            showControls();
+            return;
+        }
+
+        nextEpisodePromptVisible = true;
+        nextEpisodeCountdown = 5;
+        handler.removeCallbacks(nextEpisodeTick);
+        handler.removeCallbacks(hideChrome);
+        handler.removeCallbacks(hideStatus);
+        hidePlaybackState();
+        statusView.setVisibility(View.GONE);
+        topBar.setVisibility(View.GONE);
+        bottomPanel.setVisibility(View.GONE);
+        controlsVisible = false;
+        nextEpisodeOverlay.setVisibility(View.VISIBLE);
+        nextEpisodeOverlay.bringToFront();
+        nextEpisodeTick.run();
+
+        nextEpisodeOverlay.post(new Runnable() {
+            @Override public void run() {
+                View card = nextEpisodeOverlay.getChildAt(0);
+                if (card instanceof ViewGroup) {
+                    View actions = ((ViewGroup) card).getChildAt(2);
+                    if (actions instanceof ViewGroup && ((ViewGroup) actions).getChildCount() > 0) {
+                        ((ViewGroup) actions).getChildAt(0).requestFocus();
+                    }
+                }
+            }
+        });
+    }
+
+    private void hideNextEpisodePrompt() {
+        nextEpisodePromptVisible = false;
+        handler.removeCallbacks(nextEpisodeTick);
+        if (nextEpisodeOverlay != null) nextEpisodeOverlay.setVisibility(View.GONE);
     }
 
     private void buildDrawer() {
@@ -844,7 +1073,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         }
 
         updateMediaLabels();
-        showStatus("正在连接播放线路…", true, 0);
+        hideNextEpisodePrompt();
+        showPlaybackState("正在连接播放线路…", true);
 
         String originalUrl = currentSource.episodes.get(episodeIndex);
         controller.load(buildPlayableUrl(originalUrl));
@@ -900,6 +1130,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private void showStatus(String text, boolean showChrome, long autoHideMs) {
         statusView.setText(text);
         statusView.setVisibility(View.VISIBLE);
+        statusView.bringToFront();
         if (showChrome) showControls();
         handler.removeCallbacks(hideStatus);
         if (autoHideMs > 0) handler.postDelayed(hideStatus, autoHideMs);
@@ -910,7 +1141,11 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         int key = event.getKeyCode();
 
         if (key == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_DOWN) {
-            if (resumePromptVisible) {
+            if (nextEpisodePromptVisible) {
+                hideNextEpisodePrompt();
+                showControls();
+                if (playPauseButton != null) playPauseButton.requestFocus();
+            } else if (resumePromptVisible) {
                 finish();
             } else if (drawerVisible) {
                 closeDrawer(true);
@@ -922,7 +1157,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             return true;
         }
 
-        if (drawerVisible && isRemoteNavigationKey(key)) {
+        if ((drawerVisible || resumePromptVisible || nextEpisodePromptVisible)
+                && isRemoteNavigationKey(key)) {
             return super.dispatchKeyEvent(event);
         }
 
@@ -993,9 +1229,11 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         if (controller != null && controller.playPause()) {
             updatePlayPauseButton();
             if (controller.isPlaying()) {
+                hidePlaybackState();
                 showStatus("继续播放", true, 1200);
             } else {
-                showStatus("已暂停", true, 0);
+                showPlaybackState("已暂停", false);
+                showControls();
             }
         } else {
             showStatus("播放器准备中…", true, 1800);
@@ -1078,6 +1316,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
     @Override
     public void onPrepared(int durationMs) {
+        hidePlaybackState();
         updatePlayPauseButton();
         durationView.setText(formatTime(durationMs));
         if (pendingResumePositionMs > 0 && !resumeApplied) {
@@ -1156,13 +1395,24 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     }
 
     @Override
+    public void onBuffering(boolean buffering) {
+        if (buffering) {
+            showPlaybackState("正在缓冲…", true);
+        } else if (controller != null && controller.isPlaying()) {
+            hidePlaybackState();
+        }
+    }
+
+    @Override
     public void onCompleted() {
         saveRecord(true);
-        nextEpisode();
+        updatePlayPauseButton();
+        showNextEpisodePrompt();
     }
 
     @Override
     public void onError(String message) {
+        hidePlaybackState();
         updatePlayPauseButton();
 
         if (currentSource != null) selector.markFailed(currentSource.source);

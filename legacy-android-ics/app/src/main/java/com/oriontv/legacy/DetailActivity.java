@@ -45,7 +45,6 @@ public class DetailActivity extends BaseActivity {
     private ImageView posterView;
     private Button favoriteButton;
     private SearchResult selected;
-    private View selectedEpisodeView;
     private String query;
     private String preferredSource;
     private String preferredId;
@@ -121,13 +120,10 @@ public class DetailActivity extends BaseActivity {
         episodeGrid.setHorizontalSpacing(Ui.dp(this, 8));
         episodeGrid.setVerticalSpacing(Ui.dp(this, 8));
         episodeGrid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
-        episodeGrid.setSelector(android.R.color.transparent);
-        episodeGrid.setDrawSelectorOnTop(false);
+        Ui.configureGridFocus(episodeGrid);
         episodeGrid.setVerticalScrollBarEnabled(false);
-        episodeGrid.setScrollingCacheEnabled(false);
         episodeGrid.setFocusable(true);
         episodeGrid.setFocusableInTouchMode(false);
-        episodeGrid.setChoiceMode(GridView.CHOICE_MODE_SINGLE);
 
         episodeAdapter = new EpisodeAdapter();
         episodeGrid.setAdapter(episodeAdapter);
@@ -135,29 +131,6 @@ public class DetailActivity extends BaseActivity {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 openPlayer(position);
-            }
-        });
-        episodeGrid.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (selectedEpisodeView != null && selectedEpisodeView != view) {
-                    selectedEpisodeView.setSelected(false);
-                    selectedEpisodeView.setActivated(false);
-                }
-                if (view != null) {
-                    view.setSelected(true);
-                    view.setActivated(true);
-                    selectedEpisodeView = view;
-                }
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-                if (selectedEpisodeView != null) {
-                    selectedEpisodeView.setSelected(false);
-                    selectedEpisodeView.setActivated(false);
-                    selectedEpisodeView = null;
-                }
             }
         });
         episodeGrid.setOnKeyListener(new View.OnKeyListener() {
@@ -329,11 +302,9 @@ public class DetailActivity extends BaseActivity {
         }
 
         int episodeCount = source.episodes == null ? 0 : source.episodes.size();
-        selectedEpisodeView = null;
         episodeAdapter.setEpisodeCount(episodeCount);
         if (episodeCount > 0) {
             episodeGrid.setSelection(0);
-            episodeGrid.setItemChecked(0, true);
         }
 
         updateFavoriteButton();

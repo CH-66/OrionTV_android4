@@ -1,14 +1,45 @@
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_focused="true">
+    <!-- Active option + remote focus: keep the active fill and add a bright focus ring. -->
+    <item android:state_focused="true" android:state_selected="true">
         <shape android:shape="rectangle">
-            <solid android:color="@color/orion_selected" />
-            <stroke android:width="2dp" android:color="@color/orion_focus" />
+            <solid android:color="@color/orion_active" />
+            <stroke android:width="3dp" android:color="@color/orion_focus_ring" />
             <corners android:radius="12dp" />
         </shape>
     </item>
+    <item android:state_focused="true" android:state_activated="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/orion_active" />
+            <stroke android:width="3dp" android:color="@color/orion_focus_ring" />
+            <corners android:radius="12dp" />
+        </shape>
+    </item>
+    <!-- Remote focus only: neutral surface + bright outer ring. -->
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#121A16" />
+            <stroke android:width="3dp" android:color="@color/orion_focus_ring" />
+            <corners android:radius="12dp" />
+        </shape>
+    </item>
+    <!-- Persisted/current option: green fill stays visible after focus moves away. -->
     <item android:state_selected="true">
         <shape android:shape="rectangle">
-            <solid android:color="#1D432B" />
+            <solid android:color="@color/orion_active" />
+            <stroke android:width="1dp" android:color="@color/orion_accent" />
+            <corners android:radius="12dp" />
+        </shape>
+    </item>
+    <item android:state_activated="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/orion_active" />
+            <stroke android:width="1dp" android:color="@color/orion_accent" />
+            <corners android:radius="12dp" />
+        </shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#254A32" />
             <stroke android:width="1dp" android:color="@color/orion_accent" />
             <corners android:radius="12dp" />
         </shape>

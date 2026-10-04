@@ -8,6 +8,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.GridView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -94,6 +95,13 @@ public final class Ui {
         button.setTextSize(14);
         button.setPadding(dp(activity, 12), 0, dp(activity, 12), 0);
         button.setBackgroundResource(R.drawable.tab_focus);
+        button.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                v.setScaleX(hasFocus ? 1.04f : 1.0f);
+                v.setScaleY(hasFocus ? 1.04f : 1.0f);
+            }
+        });
         return button;
     }
 
@@ -123,6 +131,13 @@ public final class Ui {
         editText.setBackgroundResource(R.drawable.edit_focus);
         editText.setPadding(dp(activity, 14), 0, dp(activity, 14), 0);
         return editText;
+    }
+
+    public static void configureGridFocus(GridView grid) {
+        grid.setSelector(R.drawable.grid_focus_ring);
+        grid.setDrawSelectorOnTop(true);
+        grid.setCacheColorHint(Color.TRANSPARENT);
+        grid.setScrollingCacheEnabled(false);
     }
 
     public static ProgressBar progress(Activity activity) {

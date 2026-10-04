@@ -46,6 +46,7 @@ public class FavoritesActivity extends BaseActivity {
         root.addView(status);
 
         GridView grid = new GridView(this);
+        Ui.configureGridFocus(grid);
         grid.setNumColumns(GridView.AUTO_FIT);
         grid.setColumnWidth(Ui.dp(this, 160));
         grid.setHorizontalSpacing(Ui.dp(this, 12));

@@ -12,6 +12,9 @@ jobs:
   build_android_ics:
     name: Compile Android 4.0.4 API 15 APK
     runs-on: ubuntu-22.04
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -24,8 +27,9 @@ jobs:
 
       - name: Install legacy Android SDK packages
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          yes | sdkmanager "platform-tools" "platforms;android-25" "build-tools;26.0.2"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          yes | "$SDKMANAGER" "platform-tools" "platforms;android-25" "build-tools;26.0.2"
 
       - name: Set up JDK 8 for legacy Gradle build
         uses: actions/setup-java@v4

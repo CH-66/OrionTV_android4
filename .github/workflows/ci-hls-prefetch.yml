@@ -1,0 +1,44 @@
+name: CI HLS Prefetch Cache
+
+on:
+  push:
+    branches:
+      - perf/hls-prefetch-cache
+
+permissions:
+  contents: read
+
+jobs:
+  build_android_ics:
+    name: Compile Android 4.0.4 API 15 APK
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 for Android SDK tools
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install legacy Android SDK packages
+        run: |
+          yes | sdkmanager "platform-tools" "platforms;android-25" "build-tools;26.0.2"
+
+      - name: Set up JDK 8 for legacy Gradle build
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "8"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "4.1"
+
+      - name: Build legacy debug APK
+        run: gradle -p legacy-android-ics :app:assembleDebug

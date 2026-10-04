@@ -3,11 +3,8 @@ package com.oriontv.legacy.net;
 import android.os.Build;
 import android.util.Log;
 
-import java.lang.reflect.Method;
 import java.security.KeyStore;
-import java.security.Provider;
 import java.security.SecureRandom;
-import java.security.Security;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
@@ -28,7 +25,6 @@ import okhttp3.TlsVersion;
 
 public final class LegacyHttpCompat {
     private static final String TAG = "LegacyHttpCompat";
-    private static volatile boolean conscryptChecked;
 
     private LegacyHttpCompat() {
     }
@@ -56,7 +52,6 @@ public final class LegacyHttpCompat {
                 .followRedirects(true)
                 .followSslRedirects(true);
         try {
-            installConscrypt();
             final X509TrustManager trustAll = new X509TrustManager() {
                 @Override
                 public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
@@ -81,8 +76,9 @@ public final class LegacyHttpCompat {
                 }
             });
             builder.connectionSpecs(legacyConnectionSpecs());
-        } catch (Exception error) {
-            Log.w(TAG, "Failed to install unsafe media TLS", error);
+        } catch (Throwable error) {
+            Log.w(TAG, "Failed to configure legacy media TLS; falling back to cleartext-only", error);
+            builder.connectionSpecs(Collections.singletonList(ConnectionSpec.CLEARTEXT));
         }
         return builder;
     }
@@ -92,11 +88,11 @@ public final class LegacyHttpCompat {
             return;
         }
         try {
-            installConscrypt();
             TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             trustManagerFactory.init((KeyStore) null);
             TrustManager[] trustManagers = trustManagerFactory.getTrustManagers();
             if (trustManagers == null || trustManagers.length == 0 || !(trustManagers[0] instanceof X509TrustManager)) {
+                builder.connectionSpecs(Collections.singletonList(ConnectionSpec.CLEARTEXT));
                 return;
             }
             X509TrustManager trustManager = (X509TrustManager) trustManagers[0];
@@ -104,7 +100,8 @@ public final class LegacyHttpCompat {
             sslContext.init(null, new TrustManager[]{trustManager}, new SecureRandom());
             builder.sslSocketFactory(new Tls12SocketFactory(sslContext.getSocketFactory()), trustManager);
             builder.connectionSpecs(legacyConnectionSpecs());
-        } catch (Exception ignored) {
+        } catch (Throwable error) {
+            Log.w(TAG, "Platform TLS unavailable on legacy device; falling back to cleartext-only", error);
             builder.connectionSpecs(Collections.singletonList(ConnectionSpec.CLEARTEXT));
         }
     }
@@ -115,22 +112,6 @@ public final class LegacyHttpCompat {
                 .allEnabledCipherSuites()
                 .build();
         return Arrays.asList(compatibleTls, ConnectionSpec.COMPATIBLE_TLS, ConnectionSpec.CLEARTEXT);
-    }
-
-    private static synchronized void installConscrypt() {
-        if (conscryptChecked) {
-            return;
-        }
-        conscryptChecked = true;
-        try {
-            Class<?> conscrypt = Class.forName("org.conscrypt.Conscrypt");
-            Method newProvider = conscrypt.getMethod("newProvider");
-            Provider provider = (Provider) newProvider.invoke(null);
-            Security.insertProviderAt(provider, 1);
-            Log.d(TAG, "Installed Conscrypt provider for legacy TLS");
-        } catch (Throwable error) {
-            Log.w(TAG, "Conscrypt provider unavailable; falling back to platform TLS", error);
-        }
     }
 
     public static boolean isTlsProblem(Throwable error) {
@@ -162,6 +143,6 @@ public final class LegacyHttpCompat {
         if (action == null || action.length() == 0) {
             action = "请求";
         }
-        return action + "失败：当前 Android 4.0.4 与目标 HTTPS/TLS 不兼容，请在设置中改用兼容服务地址或切换线路。";
+        return action + "失败：当前 Android 4.0.4 与目标 HTTPS/TLS 不兼容，请在设置中改用 HTTP 兼容服务地址或切换线路。";
     }
 }

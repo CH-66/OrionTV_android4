@@ -2,22 +2,21 @@ package com.oriontv.legacy.media;
 
 import android.content.Context;
 import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
 import java.io.IOException;
 
-import tv.danmaku.ijk.media.player.IMediaPlayer;
-import tv.danmaku.ijk.media.player.IjkMediaPlayer;
-
 public class LegacyPlayerController implements SurfaceHolder.Callback {
     private static final String TAG = "LegacyPlayer";
-    private static final int SDL_FCC_I420 = 0x30323449;
 
     public interface Listener {
         void onPrepared(int durationMs);
         void onProgress(int positionMs, int durationMs);
+        void onVideoSizeChanged(int width, int height);
+        void onBuffering(boolean buffering);
         void onCompleted();
         void onError(String message);
     }
@@ -25,7 +24,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     private final Context context;
     private final SurfaceView surfaceView;
     private final Listener listener;
-    private IjkMediaPlayer mediaPlayer;
+    private MediaPlayer mediaPlayer;
     private String pendingUrl;
     private boolean surfaceReady;
     private boolean prepared;
@@ -36,18 +35,13 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         public void run() {
             if (mediaPlayer != null && prepared) {
                 try {
-                    listener.onProgress((int) mediaPlayer.getCurrentPosition(), (int) mediaPlayer.getDuration());
+                    listener.onProgress(mediaPlayer.getCurrentPosition(), mediaPlayer.getDuration());
                 } catch (RuntimeException ignored) {
                 }
             }
             handler.postDelayed(this, 1000);
         }
     };
-
-    static {
-        IjkMediaPlayer.loadLibrariesOnce(null);
-        IjkMediaPlayer.native_profileBegin("libijkplayer.so");
-    }
 
     public LegacyPlayerController(Context context, SurfaceView surfaceView, Listener listener) {
         this.context = context.getApplicationContext();
@@ -58,7 +52,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
 
     public void load(String url) {
         pendingUrl = url;
-        Log.d(TAG, "load " + url);
+        Log.d(TAG, "load system " + url);
         if (surfaceReady) {
             prepare(url);
         }
@@ -72,7 +66,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
             } else {
                 mediaPlayer.start();
             }
-            Log.d(TAG, "playPause playing=" + mediaPlayer.isPlaying());
+            Log.d(TAG, "playPause system playing=" + mediaPlayer.isPlaying());
             return true;
         } catch (RuntimeException e) {
             Log.e(TAG, "playPause failed", e);
@@ -83,9 +77,9 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     public boolean seekBy(int deltaMs) {
         if (mediaPlayer == null || !prepared) return false;
         try {
-            long position = mediaPlayer.getCurrentPosition() + deltaMs;
+            int position = mediaPlayer.getCurrentPosition() + deltaMs;
             if (position < 0) position = 0;
-            long duration = mediaPlayer.getDuration();
+            int duration = mediaPlayer.getDuration();
             if (duration > 0 && position > duration) position = duration;
             mediaPlayer.seekTo(position);
             Log.d(TAG, "seekBy delta=" + deltaMs + " position=" + position + " duration=" + duration);
@@ -96,11 +90,27 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         }
     }
 
+    public boolean seekTo(int positionMs) {
+        if (mediaPlayer == null || !prepared) return false;
+        try {
+            int duration = mediaPlayer.getDuration();
+            int target = positionMs;
+            if (target < 0) target = 0;
+            if (duration > 0 && target > duration) target = duration;
+            mediaPlayer.seekTo(target);
+            Log.d(TAG, "seekTo position=" + target + " duration=" + duration);
+            return true;
+        } catch (RuntimeException e) {
+            Log.e(TAG, "seekTo failed position=" + positionMs, e);
+            return false;
+        }
+    }
+
     public boolean isPlaying() {
         if (mediaPlayer == null || !prepared) return false;
         try {
             return mediaPlayer.isPlaying();
-        } catch (RuntimeException e) {
+        } catch (RuntimeException ignored) {
             return false;
         }
     }
@@ -111,12 +121,20 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
 
     public int position() {
         if (mediaPlayer == null || !prepared) return 0;
-        return (int) mediaPlayer.getCurrentPosition();
+        try {
+            return mediaPlayer.getCurrentPosition();
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
     }
 
     public int duration() {
         if (mediaPlayer == null || !prepared) return 0;
-        return (int) mediaPlayer.getDuration();
+        try {
+            return mediaPlayer.getDuration();
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
     }
 
     public void release() {
@@ -127,7 +145,10 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
                 mediaPlayer.stop();
             } catch (RuntimeException ignored) {
             }
-            mediaPlayer.setDisplay(null);
+            try {
+                mediaPlayer.setDisplay(null);
+            } catch (RuntimeException ignored) {
+            }
             mediaPlayer.release();
             mediaPlayer = null;
         }
@@ -135,44 +156,63 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
 
     private void prepare(String url) {
         release();
-        Log.d(TAG, "prepare ijk " + url);
-        mediaPlayer = new IjkMediaPlayer();
+        Log.d(TAG, "prepare system MediaPlayer " + url);
+
+        mediaPlayer = new MediaPlayer();
         mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
         mediaPlayer.setVolume(1.0f, 1.0f);
         mediaPlayer.setDisplay(surfaceView.getHolder());
-        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", 0);
-        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-hevc", 0);
-        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "opensles", 1);
-        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "overlay-format", SDL_FCC_I420);
-        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 1);
-        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 1);
-        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared", 1);
-        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_clear", 1);
-        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "reconnect", 1);
-        mediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "timeout", 15000000);
-        mediaPlayer.setOnPreparedListener(new IMediaPlayer.OnPreparedListener() {
+        mediaPlayer.setScreenOnWhilePlaying(true);
+
+        mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
             @Override
-            public void onPrepared(IMediaPlayer mp) {
+            public void onPrepared(MediaPlayer mp) {
                 prepared = true;
-                Log.d(TAG, "onPrepared duration=" + mp.getDuration());
+                Log.d(TAG, "system onPrepared duration=" + mp.getDuration()
+                        + " video=" + mp.getVideoWidth() + "x" + mp.getVideoHeight());
                 mp.start();
-                listener.onPrepared((int) mp.getDuration());
+                listener.onPrepared(mp.getDuration());
+                handler.removeCallbacks(progressRunnable);
                 handler.post(progressRunnable);
             }
         });
-        mediaPlayer.setOnCompletionListener(new IMediaPlayer.OnCompletionListener() {
+
+        mediaPlayer.setOnVideoSizeChangedListener(new MediaPlayer.OnVideoSizeChangedListener() {
             @Override
-            public void onCompletion(IMediaPlayer mp) {
-                Log.d(TAG, "onCompletion");
+            public void onVideoSizeChanged(MediaPlayer mp, int width, int height) {
+                Log.d(TAG, "system videoSize=" + width + "x" + height);
+                listener.onVideoSizeChanged(width, height);
+            }
+        });
+
+        mediaPlayer.setOnInfoListener(new MediaPlayer.OnInfoListener() {
+            @Override
+            public boolean onInfo(MediaPlayer mp, int what, int extra) {
+                if (what == 701) {
+                    Log.d(TAG, "system buffering start");
+                    listener.onBuffering(true);
+                } else if (what == 702) {
+                    Log.d(TAG, "system buffering end");
+                    listener.onBuffering(false);
+                }
+                return false;
+            }
+        });
+
+        mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+            @Override
+            public void onCompletion(MediaPlayer mp) {
+                Log.d(TAG, "system onCompletion");
                 listener.onCompleted();
             }
         });
-        mediaPlayer.setOnErrorListener(new IMediaPlayer.OnErrorListener() {
+
+        mediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
             @Override
-            public boolean onError(IMediaPlayer mp, int what, int extra) {
+            public boolean onError(MediaPlayer mp, int what, int extra) {
                 prepared = false;
-                Log.e(TAG, "onError what=" + what + " extra=" + extra + " url=" + pendingUrl);
-                listener.onError("IjkPlayer error " + what + "/" + extra);
+                Log.e(TAG, "system onError what=" + what + " extra=" + extra + " url=" + pendingUrl);
+                listener.onError("System player error " + what + "/" + extra);
                 return true;
             }
         });
@@ -181,10 +221,10 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
             mediaPlayer.setDataSource(url);
             mediaPlayer.prepareAsync();
         } catch (IOException e) {
-            Log.e(TAG, "setDataSource IOException " + url, e);
+            Log.e(TAG, "system setDataSource IOException " + url, e);
             listener.onError(e.getMessage());
         } catch (RuntimeException e) {
-            Log.e(TAG, "setDataSource RuntimeException " + url, e);
+            Log.e(TAG, "system setDataSource RuntimeException " + url, e);
             listener.onError(e.getMessage());
         }
     }
@@ -192,7 +232,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         surfaceReady = true;
-        if (pendingUrl != null) {
+        if (pendingUrl != null && mediaPlayer == null) {
             prepare(pendingUrl);
         }
     }
@@ -205,7 +245,10 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     public void surfaceDestroyed(SurfaceHolder holder) {
         surfaceReady = false;
         if (mediaPlayer != null) {
-            mediaPlayer.setDisplay(null);
+            try {
+                mediaPlayer.setDisplay(null);
+            } catch (RuntimeException ignored) {
+            }
         }
     }
 }

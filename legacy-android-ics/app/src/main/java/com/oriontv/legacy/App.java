@@ -46,6 +46,12 @@ public class App extends Application {
 
     @Override
     public void onTerminate() {
+        if (apiClient != null) {
+            try {
+                apiClient.shutdown();
+            } catch (Exception ignored) {
+            }
+        }
         if (playbackProxyServer != null) {
             try {
                 playbackProxyServer.close();

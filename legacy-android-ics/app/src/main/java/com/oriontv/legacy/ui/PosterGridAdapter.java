@@ -109,7 +109,11 @@ public class PosterGridAdapter extends BaseAdapter {
         convertView.setSelected(activated);
 
         com.oriontv.legacy.App.get().api().loadImage(
-                item.poster, holder.image, R.drawable.poster_placeholder);
+                item.poster,
+                holder.image,
+                R.drawable.poster_placeholder,
+                Ui.dp(activity, 154),
+                Ui.dp(activity, 210));
         return convertView;
     }
 

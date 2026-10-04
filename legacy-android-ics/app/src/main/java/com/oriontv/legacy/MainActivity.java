@@ -32,6 +32,7 @@ public class MainActivity extends BaseActivity {
     private TextView status;
     private Category selected;
     private int pageStart;
+    private View selectedPosterView;
     private final ArrayList<Button> categoryButtons = new ArrayList<Button>();
 
     private final Category[] categories = new Category[] {
@@ -126,6 +127,7 @@ public class MainActivity extends BaseActivity {
         grid.setSelector(android.R.color.transparent);
         grid.setCacheColorHint(android.graphics.Color.TRANSPARENT);
         grid.setVerticalScrollBarEnabled(false);
+        grid.setScrollingCacheEnabled(false);
         grid.setFocusable(true);
         grid.setFocusableInTouchMode(false);
         grid.setChoiceMode(GridView.CHOICE_MODE_SINGLE);
@@ -142,21 +144,27 @@ public class MainActivity extends BaseActivity {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 grid.setItemChecked(position, true);
-                for (int i = 0; i < grid.getChildCount(); i++) {
-                    View child = grid.getChildAt(i);
-                    if (child != null) {
-                        child.setActivated(false);
-                        child.setSelected(false);
-                    }
+
+                // Only update the two cards whose focus state actually changed.
+                // Repainting every visible child made old Android TVs visibly flash.
+                if (selectedPosterView != null && selectedPosterView != view) {
+                    selectedPosterView.setActivated(false);
+                    selectedPosterView.setSelected(false);
                 }
                 if (view != null) {
                     view.setActivated(true);
                     view.setSelected(true);
+                    selectedPosterView = view;
                 }
             }
 
             @Override
             public void onNothingSelected(AdapterView<?> parent) {
+                if (selectedPosterView != null) {
+                    selectedPosterView.setActivated(false);
+                    selectedPosterView.setSelected(false);
+                    selectedPosterView = null;
+                }
             }
         });
         grid.setOnKeyListener(new View.OnKeyListener() {

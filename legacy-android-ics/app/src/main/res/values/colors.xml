@@ -1,9 +1,12 @@
 <resources>
-    <color name="orion_bg">#101214</color>
-    <color name="orion_panel">#1F2327</color>
-    <color name="orion_focus">#00BB5E</color>
-    <color name="orion_text">#F5F5F5</color>
-    <color name="orion_muted">#B8B8B8</color>
-    <color name="orion_error">#FF5A5F</color>
+    <color name="orion_bg">#0D1411</color>
+    <color name="orion_panel">#18231D</color>
+    <color name="orion_panel_alt">#1D2A22</color>
+    <color name="orion_accent">#22C55E</color>
+    <color name="orion_focus">#34D17A</color>
+    <color name="orion_selected">#203A2B</color>
+    <color name="orion_text">#F3F7F4</color>
+    <color name="orion_muted">#9EAAA3</color>
+    <color name="orion_error">#FF6469</color>
     <color name="orion_black">#000000</color>
 </resources>

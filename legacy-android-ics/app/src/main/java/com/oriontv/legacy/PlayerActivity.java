@@ -232,11 +232,20 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             }
         }
 
-        // Explicit user/source choice is respected. When no source is specified,
-        // prefer a playable source without known ad history before resolution.
+        // When no source is specified, choose by ad reputation first, then resolution.
         if (currentSource == null && sources.size() > 0) {
             currentSource = selector.best(sources, episodeIndex);
             if (currentSource == null) currentSource = sources.get(0);
+        } else if (currentSource != null && currentSource.source != null
+                && app.prefs().getSourceAdPenalty(currentSource.source) > 0) {
+            // DetailActivity always sends its selected source. For a source already known
+            // to inject ads, silently prefer a cleaner playable source before playback.
+            SearchResult preferred = selector.best(sources, episodeIndex);
+            if (preferred != null && preferred.source != null
+                    && app.prefs().getSourceAdPenalty(preferred.source)
+                    < app.prefs().getSourceAdPenalty(currentSource.source)) {
+                currentSource = preferred;
+            }
         }
     }
 

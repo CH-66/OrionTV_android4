@@ -3,6 +3,14 @@
         <item name="android:windowBackground">@color/orion_bg</item>
     </style>
 
+    <style name="SplashTheme" parent="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowBackground">@color/orion_black</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+
     <style name="PlayerTheme" parent="@android:style/Theme.Black.NoTitleBar.Fullscreen">
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowFullscreen">true</item>

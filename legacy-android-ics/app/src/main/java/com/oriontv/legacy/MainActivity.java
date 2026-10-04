@@ -69,7 +69,7 @@ public class MainActivity extends BaseActivity {
         LinearLayout root = Ui.vertical(this);
 
         LinearLayout header = Ui.row(this);
-        TextView brand = Ui.brand(this, "OrionTV");
+        TextView brand = Ui.brand(this, "森映TV");
         header.addView(brand, new LinearLayout.LayoutParams(0, Ui.dp(this, 42), 1));
 
         LinearLayout nav = Ui.row(this);

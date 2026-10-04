@@ -28,18 +28,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android 25 SDK
+      - name: Install isolated Android 25 SDK
         shell: bash
         run: |
-          export ANDROID_HOME="/usr/local/lib/android/sdk"
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          HOST_SDK="/usr/local/lib/android/sdk"
+          SDKMANAGER="$HOST_SDK/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+            SDKMANAGER="$(find "$HOST_SDK/cmdline-tools" -type f -name sdkmanager | head -n 1)"
           fi
           test -x "$SDKMANAGER"
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platform-tools" "platforms;android-25" "build-tools;26.0.2"
+
+          LEGACY_SDK="$RUNNER_TEMP/android-sdk-legacy"
+          mkdir -p "$LEGACY_SDK"
+          yes | "$SDKMANAGER" --sdk_root="$LEGACY_SDK" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$LEGACY_SDK" "platforms;android-25" "build-tools;26.0.2"
+
+          echo "ANDROID_HOME=$LEGACY_SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$LEGACY_SDK" >> "$GITHUB_ENV"
 
       - name: Setup Java 8
         uses: actions/setup-java@v4

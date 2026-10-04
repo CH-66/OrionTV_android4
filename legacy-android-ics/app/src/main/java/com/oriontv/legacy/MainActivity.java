@@ -33,6 +33,8 @@ public class MainActivity extends BaseActivity {
     private Category selected;
     private int pageStart;
     private View selectedPosterView;
+    private GridView posterGrid;
+    private boolean initialPosterFocusPending = true;
     private final ArrayList<Button> categoryButtons = new ArrayList<Button>();
 
     private final Category[] categories = new Category[] {
@@ -118,7 +120,8 @@ public class MainActivity extends BaseActivity {
         status = Ui.sectionTitle(this, "最近播放");
         root.addView(status);
 
-        final GridView grid = new GridView(this);
+        posterGrid = new GridView(this);
+        final GridView grid = posterGrid;
         grid.setNumColumns(6);
         grid.setColumnWidth(Ui.dp(this, 164));
         grid.setHorizontalSpacing(Ui.dp(this, 14));
@@ -349,6 +352,33 @@ public class MainActivity extends BaseActivity {
 
         adapter.setItems(items);
         status.setText(items.size() == 0 ? "暂无播放记录" : "最近播放 · " + items.size());
+        focusFirstPosterIfNeeded();
+    }
+
+    private void focusFirstPosterIfNeeded() {
+        if (!initialPosterFocusPending
+                || selected != categories[0]
+                || posterGrid == null
+                || adapter == null
+                || adapter.getCount() == 0) {
+            return;
+        }
+
+        // Consume this only after the default page actually has content. If local
+        // history is empty but cloud history arrives shortly afterwards, the first
+        // cloud-backed poster can still receive initial TV focus.
+        initialPosterFocusPending = false;
+        posterGrid.post(new Runnable() {
+            @Override
+            public void run() {
+                if (posterGrid == null || adapter == null || adapter.getCount() == 0) {
+                    return;
+                }
+                posterGrid.setSelection(0);
+                posterGrid.setItemChecked(0, true);
+                posterGrid.requestFocus();
+            }
+        });
     }
 
     private void open(PosterItem item) {

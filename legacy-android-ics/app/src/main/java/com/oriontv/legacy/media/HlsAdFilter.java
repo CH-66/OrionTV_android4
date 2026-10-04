@@ -249,7 +249,7 @@ public final class HlsAdFilter {
                     diagnostics, "strong-ad-uri:" + uriRemovedSegments);
         }
 
-        boolean filteringBypassed = unresolvedScteMarkers > 0 && removedSegments == 0;
+        boolean filteringBypassed = unresolvedScteMarkers > 0;
         if (filteringBypassed) {
             diagnostics = appendDiagnostic(diagnostics, "ad-evidence-not-safely-bounded");
         }
@@ -622,6 +622,23 @@ public final class HlsAdFilter {
 
         String direct = uriHost(segmentUri);
         if (direct != null) return direct;
+
+        // The TV client may fetch an HTTPS playlist through an HTTP proxy URL such as
+        // /v1?u=<original-m3u8>. Relative media URIs must be resolved against the nested
+        // original playlist, otherwise every segment appears to come from the proxy host
+        // and foreign-host ad detection becomes blind.
+        String nestedPlaylist = queryTarget(playlistUrl);
+        if (nestedPlaylist != null) {
+            try {
+                URI nestedBase = URI.create(nestedPlaylist);
+                URI nestedResolved = nestedBase.resolve(segmentUri);
+                String nestedHost = nestedResolved.getHost();
+                if (nestedHost != null && nestedHost.length() > 0) {
+                    return nestedHost.toLowerCase(Locale.US);
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
 
         try {
             URI base = URI.create(playlistUrl);

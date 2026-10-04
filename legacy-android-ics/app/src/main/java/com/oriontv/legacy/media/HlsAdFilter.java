@@ -18,8 +18,9 @@ import java.util.regex.Pattern;
  * - Strong ad-shaped segment URIs.
  * - Short foreign-host A-B-A mid-roll runs, even without DISCONTINUITY.
  * - Short foreign-host pre-roll/post-roll runs when a dominant main-content host exists.
+ * - Short same-CDN discontinuity islands only when surrounded by long main-content runs.
  *
- * A bare EXT-X-DISCONTINUITY is never considered an ad by itself.
+ * A single bare EXT-X-DISCONTINUITY is never considered an ad by itself.
  */
 public final class HlsAdFilter {
     private static final long MAX_MIDROLL_MS = 120000L;
@@ -113,7 +114,7 @@ public final class HlsAdFilter {
             );
         }
 
-        ForeignBlockResult foreign = removeHighConfidenceForeignHostRuns(
+        ForeignBlockResult foreign = removeHighConfidenceAdRuns(
                 playlistUrl, normalized);
         normalized = foreign.playlist;
 
@@ -308,7 +309,7 @@ public final class HlsAdFilter {
         }
     }
 
-    private static ForeignBlockResult removeHighConfidenceForeignHostRuns(
+    private static ForeignBlockResult removeHighConfidenceAdRuns(
             String playlistUrl, String body) {
         String[] lines = body.split("\n", -1);
         List<String> header = new ArrayList<String>();
@@ -876,13 +877,26 @@ public final class HlsAdFilter {
 
     private static void appendBlock(StringBuilder out, List<String> block,
                                     boolean forceDiscontinuityBefore) {
-        if (forceDiscontinuityBefore && !containsDiscontinuity(block)) {
+        if (forceDiscontinuityBefore
+                && containsMediaSegment(block)
+                && !containsDiscontinuity(block)) {
             appendLine(out, "#EXT-X-DISCONTINUITY");
         }
         for (int i = 0; i < block.size(); i++) {
             String line = block.get(i);
             appendLine(out, line == null ? "" : line);
         }
+    }
+
+    private static boolean containsMediaSegment(List<String> block) {
+        if (block == null) return false;
+        for (int i = 0; i < block.size(); i++) {
+            String line = block.get(i);
+            if (line != null && line.trim().toUpperCase(Locale.US).startsWith("#EXTINF")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String appendDiagnostic(String current, String item) {

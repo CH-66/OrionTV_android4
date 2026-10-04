@@ -176,14 +176,15 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         lifecyclePaused = false;
 
         if (mediaPlayer != null && prepared) {
-            if (resumeAfterLifecyclePause) {
+            if (resumeAfterLifecyclePause && surfaceReady) {
                 try {
                     mediaPlayer.start();
+                    resumeAfterLifecyclePause = false;
                 } catch (RuntimeException e) {
                     Log.e(TAG, "resumeFromLifecycle failed", e);
                 }
             }
-            resumeAfterLifecyclePause = false;
+            // If the Surface has not returned yet, surfaceCreated() will resume playback.
             return;
         }
 
@@ -273,7 +274,7 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
                 Log.d(TAG, "system onPrepared generation=" + token
                         + " duration=" + mp.getDuration()
                         + " video=" + mp.getVideoWidth() + "x" + mp.getVideoHeight());
-                if (!lifecyclePaused) {
+                if (!lifecyclePaused && surfaceReady) {
                     mp.start();
                 } else {
                     resumeAfterLifecyclePause = true;
@@ -358,6 +359,10 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         if (mediaPlayer != null) {
             try {
                 mediaPlayer.setDisplay(holder);
+                if (prepared && !lifecyclePaused && resumeAfterLifecyclePause) {
+                    mediaPlayer.start();
+                    resumeAfterLifecyclePause = false;
+                }
             } catch (RuntimeException e) {
                 Log.w(TAG, "Failed to reattach Surface", e);
             }

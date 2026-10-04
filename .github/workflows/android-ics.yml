@@ -76,6 +76,7 @@ jobs:
           fi
           echo "build_type=$build_type" >> "$GITHUB_OUTPUT"
 
+      # Stable signing verification trigger
       - name: Cache stable Android signing key
         uses: actions/cache@v4
         with:

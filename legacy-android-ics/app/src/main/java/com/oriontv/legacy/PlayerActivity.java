@@ -20,6 +20,7 @@ import com.google.gson.reflect.TypeToken;
 import com.oriontv.legacy.api.ApiCallback;
 import com.oriontv.legacy.api.models.MutationResult;
 import com.oriontv.legacy.api.models.PlayRecord;
+import com.oriontv.legacy.api.models.PlayerSettings;
 import com.oriontv.legacy.api.models.SearchResult;
 import com.oriontv.legacy.data.LocalRepository;
 import com.oriontv.legacy.media.LegacyPlayerController;
@@ -34,7 +35,8 @@ import java.util.ArrayList;
 public class PlayerActivity extends BaseActivity implements LegacyPlayerController.Listener {
     private static final String VIDEO_PROXY_BASE = "http://tvproxy.t2t.cc.cd/v1";
     private static final String VIDEO_PROXY_TOKEN = "4pCCnLfe_qROZ0cGRF1tU1CigWgHDSwNvdbhAsP4Q04";
-    private static final int SEEK_STEP_MS = 10000;
+    private static final int DEFAULT_SEEK_STEP_MS = 10000;
+    private static final int DEFAULT_CONTROLS_HIDE_MS = 5000;
 
     private final Gson gson = new Gson();
     private final PlaybackSourceSelector selector = new PlaybackSourceSelector();
@@ -45,6 +47,17 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private int episodeIndex;
     private LegacyPlayerController controller;
     private long lastSave;
+    private PlayerSettings playerSettings;
+    private int seekStepMs = DEFAULT_SEEK_STEP_MS;
+    private int controlsHideMs = DEFAULT_CONTROLS_HIDE_MS;
+    private String aspectMode = "fit";
+    private int videoWidth;
+    private int videoHeight;
+    private int pendingResumePositionMs;
+    private boolean resumeApplied;
+    private boolean seekPreviewActive;
+    private int seekPreviewBaseMs;
+    private int seekPreviewPositionMs;
 
     private FrameLayout playerRoot;
     private SurfaceView surfaceView;
@@ -57,13 +70,19 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private TextView durationView;
     private ProgressBar progress;
     private Button playPauseButton;
+    private Button rewindButton;
+    private Button forwardButton;
     private Button episodeButton;
     private Button sourceButton;
+    private Button settingsButton;
     private FrameLayout drawerOverlay;
     private LinearLayout drawerPanel;
     private TextView drawerTitle;
     private LinearLayout drawerContent;
     private View drawerReturnFocus;
+    private FrameLayout resumeOverlay;
+    private TextView resumeText;
+    private boolean resumePromptVisible;
     private boolean drawerVisible;
     private boolean controlsVisible;
 
@@ -81,12 +100,27 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         }
     };
 
+    private final Runnable commitSeekPreview = new Runnable() {
+        @Override
+        public void run() {
+            if (!seekPreviewActive) return;
+            int target = seekPreviewPositionMs;
+            seekPreviewActive = false;
+            if (controller != null && controller.seekTo(target)) {
+                showStatus("已跳转至 " + formatTime(target), false, 900);
+            }
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         parseIntent();
+        loadPlayerSettings();
         buildUi();
-        playCurrent();
+        if (!showResumePromptIfNeeded()) {
+            playCurrent();
+        }
     }
 
     @Override
@@ -155,6 +189,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         buildStatus();
         buildBottomPanel();
         buildDrawer();
+        buildResumeOverlay();
 
         setContentView(playerRoot);
         controller = new LegacyPlayerController(this, surfaceView, this);
@@ -237,20 +272,22 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         buttons.setPadding(0, dp(12), 0, 0);
 
         Button previous = playerButton("上一集", false);
-        Button rewind = playerButton("快退 10秒", false);
+        rewindButton = playerButton(seekButtonLabel(false), false);
         playPauseButton = playerButton("播放", true);
-        Button forward = playerButton("快进 10秒", false);
+        forwardButton = playerButton(seekButtonLabel(true), false);
         Button next = playerButton("下一集", false);
         episodeButton = playerButton("选集", false);
         sourceButton = playerButton("线路", false);
+        settingsButton = playerButton("设置", false);
 
         buttons.addView(previous);
-        buttons.addView(rewind);
+        buttons.addView(rewindButton);
         buttons.addView(playPauseButton);
-        buttons.addView(forward);
+        buttons.addView(forwardButton);
         buttons.addView(next);
         buttons.addView(episodeButton);
         buttons.addView(sourceButton);
+        buttons.addView(settingsButton);
 
         bottomPanel.addView(progressRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
@@ -267,14 +304,14 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         previous.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { previousEpisode(); }
         });
-        rewind.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { seekBy(-SEEK_STEP_MS, "快退 10 秒"); }
+        rewindButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { seekBy(-seekStepMs, "快退 " + (seekStepMs / 1000) + " 秒"); }
         });
         playPauseButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { playPause(); }
         });
-        forward.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { seekBy(SEEK_STEP_MS, "快进 10 秒"); }
+        forwardButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { seekBy(seekStepMs, "快进 " + (seekStepMs / 1000) + " 秒"); }
         });
         next.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { nextEpisode(); }
@@ -285,6 +322,152 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         sourceButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { openSourceDrawer(); }
         });
+        settingsButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { openSettingsDrawer(); }
+        });
+    }
+
+    private void loadPlayerSettings() {
+        if (currentSource == null) {
+            playerSettings = new PlayerSettings();
+            return;
+        }
+        playerSettings = app.local().getPlayerSettings(currentSource.source, currentSource.id);
+        if (playerSettings == null) playerSettings = new PlayerSettings();
+
+        if (playerSettings.seekStepSeconds != null
+                && (playerSettings.seekStepSeconds == 10
+                || playerSettings.seekStepSeconds == 30
+                || playerSettings.seekStepSeconds == 60)) {
+            seekStepMs = playerSettings.seekStepSeconds * 1000;
+        }
+        if (playerSettings.controlsHideSeconds != null
+                && (playerSettings.controlsHideSeconds == 0
+                || playerSettings.controlsHideSeconds == 3
+                || playerSettings.controlsHideSeconds == 5
+                || playerSettings.controlsHideSeconds == 8)) {
+            controlsHideMs = playerSettings.controlsHideSeconds * 1000;
+        }
+        if ("fit".equals(playerSettings.aspectMode)
+                || "crop".equals(playerSettings.aspectMode)
+                || "stretch".equals(playerSettings.aspectMode)) {
+            aspectMode = playerSettings.aspectMode;
+        }
+    }
+
+    private void saveUiPlayerSettings() {
+        if (currentSource == null) return;
+        if (playerSettings == null) playerSettings = new PlayerSettings();
+        playerSettings.seekStepSeconds = seekStepMs / 1000;
+        playerSettings.controlsHideSeconds = controlsHideMs / 1000;
+        playerSettings.aspectMode = aspectMode;
+        app.local().savePlayerSettings(currentSource.source, currentSource.id, playerSettings);
+    }
+
+    private String seekButtonLabel(boolean forward) {
+        return (forward ? "快进 " : "快退 ") + (seekStepMs / 1000) + "秒";
+    }
+
+    private void updateSeekButtonLabels() {
+        if (rewindButton != null) rewindButton.setText(seekButtonLabel(false));
+        if (forwardButton != null) forwardButton.setText(seekButtonLabel(true));
+    }
+
+    private void buildResumeOverlay() {
+        resumeOverlay = new FrameLayout(this);
+        resumeOverlay.setBackgroundColor(0xb3000000);
+        resumeOverlay.setVisibility(View.GONE);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.setPadding(dp(34), dp(28), dp(34), dp(28));
+        card.setBackgroundDrawable(roundedBackground(0xf21a1e24, 18, 1, 0x445f6a78));
+
+        TextView heading = new TextView(this);
+        heading.setText("继续观看？");
+        heading.setTextColor(Color.WHITE);
+        heading.setTextSize(25);
+        heading.setGravity(Gravity.CENTER);
+        card.addView(heading, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+
+        resumeText = new TextView(this);
+        resumeText.setTextColor(0xffc1c8d2);
+        resumeText.setTextSize(16);
+        resumeText.setGravity(Gravity.CENTER);
+        resumeText.setPadding(0, dp(6), 0, dp(18));
+        card.addView(resumeText, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER);
+
+        final Button continueButton = playerButton("继续播放", true);
+        final Button restartButton = playerButton("从头播放", false);
+        actions.addView(continueButton);
+        actions.addView(restartButton);
+        card.addView(actions, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(54)));
+
+        continueButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                hideResumePrompt();
+                playCurrent();
+            }
+        });
+        restartButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                pendingResumePositionMs = 0;
+                resumeApplied = true;
+                hideResumePrompt();
+                playCurrent();
+            }
+        });
+
+        FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(
+                dp(500), dp(220), Gravity.CENTER);
+        resumeOverlay.addView(card, cardParams);
+        playerRoot.addView(resumeOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+    }
+
+    private boolean showResumePromptIfNeeded() {
+        if (currentSource == null) return false;
+        PlayRecord record = app.local().getPlayRecord(currentSource.source, currentSource.id);
+        if (record == null || record.play_time < 30 || record.index != episodeIndex + 1) return false;
+        if (record.total_time > 0 && record.play_time >= record.total_time - 30) return false;
+
+        pendingResumePositionMs = record.play_time * 1000;
+        resumeApplied = false;
+        resumePromptVisible = true;
+        controlsVisible = false;
+        topBar.setVisibility(View.GONE);
+        bottomPanel.setVisibility(View.GONE);
+        resumeText.setText("上次播放到 " + formatTime(pendingResumePositionMs)
+                + "  ·  第 " + record.index + " 集");
+        resumeOverlay.setVisibility(View.VISIBLE);
+        resumeOverlay.bringToFront();
+
+        resumeOverlay.post(new Runnable() {
+            @Override public void run() {
+                View card = resumeOverlay.getChildAt(0);
+                if (card instanceof ViewGroup) {
+                    View actions = ((ViewGroup) card).getChildAt(2);
+                    if (actions instanceof ViewGroup && ((ViewGroup) actions).getChildCount() > 0) {
+                        ((ViewGroup) actions).getChildAt(0).requestFocus();
+                    }
+                }
+            }
+        });
+        return true;
+    }
+
+    private void hideResumePrompt() {
+        resumePromptVisible = false;
+        resumeOverlay.setVisibility(View.GONE);
     }
 
     private void buildDrawer() {
@@ -374,6 +557,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
                 @Override public void onClick(View v) {
                     if (episodeIndex != index) {
                         saveRecord(true);
+                        pendingResumePositionMs = 0;
+                        resumeApplied = true;
                         episodeIndex = index;
                         closeDrawer(false);
                         playCurrent();
@@ -444,6 +629,69 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         }
 
         showDrawer(currentButton);
+    }
+
+    private void openSettingsDrawer() {
+        drawerReturnFocus = settingsButton;
+        drawerTitle.setText("播放设置");
+        drawerContent.removeAllViews();
+
+        final Button seekButton = drawerWideButton(
+                "快进步长   " + (seekStepMs / 1000) + " 秒", false, true);
+        final Button hideButton = drawerWideButton(
+                "控制栏隐藏   " + controlsHideLabel(), false, true);
+        final Button aspectButton = drawerWideButton(
+                "画面比例   " + aspectModeLabel(), false, true);
+
+        drawerContent.addView(seekButton);
+        drawerContent.addView(hideButton);
+        drawerContent.addView(aspectButton);
+
+        seekButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (seekStepMs == 10000) seekStepMs = 30000;
+                else if (seekStepMs == 30000) seekStepMs = 60000;
+                else seekStepMs = 10000;
+                seekButton.setText("快进步长   " + (seekStepMs / 1000) + " 秒");
+                updateSeekButtonLabels();
+                saveUiPlayerSettings();
+            }
+        });
+
+        hideButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (controlsHideMs == 3000) controlsHideMs = 5000;
+                else if (controlsHideMs == 5000) controlsHideMs = 8000;
+                else if (controlsHideMs == 8000) controlsHideMs = 0;
+                else controlsHideMs = 3000;
+                hideButton.setText("控制栏隐藏   " + controlsHideLabel());
+                saveUiPlayerSettings();
+            }
+        });
+
+        aspectButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if ("fit".equals(aspectMode)) aspectMode = "crop";
+                else if ("crop".equals(aspectMode)) aspectMode = "stretch";
+                else aspectMode = "fit";
+                aspectButton.setText("画面比例   " + aspectModeLabel());
+                saveUiPlayerSettings();
+                applyVideoLayout();
+            }
+        });
+
+        showDrawer(seekButton);
+    }
+
+    private String controlsHideLabel() {
+        if (controlsHideMs <= 0) return "不自动隐藏";
+        return (controlsHideMs / 1000) + " 秒";
+    }
+
+    private String aspectModeLabel() {
+        if ("crop".equals(aspectMode)) return "裁切填满";
+        if ("stretch".equals(aspectMode)) return "拉伸填满";
+        return "适应屏幕";
     }
 
     private void showDrawer(final Button preferredFocus) {
@@ -646,7 +894,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
     private void scheduleHideControls() {
         handler.removeCallbacks(hideChrome);
-        handler.postDelayed(hideChrome, 4500);
+        if (controlsHideMs > 0) handler.postDelayed(hideChrome, controlsHideMs);
     }
 
     private void showStatus(String text, boolean showChrome, long autoHideMs) {
@@ -662,7 +910,9 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         int key = event.getKeyCode();
 
         if (key == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_DOWN) {
-            if (drawerVisible) {
+            if (resumePromptVisible) {
+                finish();
+            } else if (drawerVisible) {
                 closeDrawer(true);
             } else if (controlsVisible) {
                 hideControls();
@@ -686,9 +936,9 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         if (!controlsVisible && isRemoteNavigationKey(key)) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 if (key == KeyEvent.KEYCODE_DPAD_LEFT) {
-                    seekBy(-SEEK_STEP_MS, "快退 10 秒");
+                    previewSeekBy(-seekStepMs);
                 } else if (key == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    seekBy(SEEK_STEP_MS, "快进 10 秒");
+                    previewSeekBy(seekStepMs);
                 } else {
                     showControls();
                     if (playPauseButton != null) playPauseButton.requestFocus();
@@ -727,9 +977,9 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
     private void handleMediaKey(int key) {
         if (key == KeyEvent.KEYCODE_MEDIA_REWIND) {
-            seekBy(-SEEK_STEP_MS, "快退 10 秒");
+            previewSeekBy(-seekStepMs);
         } else if (key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) {
-            seekBy(SEEK_STEP_MS, "快进 10 秒");
+            previewSeekBy(seekStepMs);
         } else if (key == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
             previousEpisode();
         } else if (key == KeyEvent.KEYCODE_MEDIA_NEXT) {
@@ -752,6 +1002,41 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         }
     }
 
+    private void previewSeekBy(int deltaMs) {
+        if (controller == null || !controller.isPrepared()) {
+            showStatus("播放器准备中…", true, 1800);
+            return;
+        }
+
+        if (!seekPreviewActive) {
+            seekPreviewBaseMs = controller.position();
+            seekPreviewPositionMs = seekPreviewBaseMs;
+            seekPreviewActive = true;
+        }
+
+        seekPreviewPositionMs += deltaMs;
+        int durationMs = controller.duration();
+        if (seekPreviewPositionMs < 0) seekPreviewPositionMs = 0;
+        if (durationMs > 0 && seekPreviewPositionMs > durationMs) {
+            seekPreviewPositionMs = durationMs;
+        }
+
+        int changed = seekPreviewPositionMs - seekPreviewBaseMs;
+        String direction = changed >= 0 ? "快进 " : "快退 ";
+        String amount = formatTime(Math.abs(changed));
+        String target = formatTime(seekPreviewPositionMs);
+        String total = durationMs > 0 ? formatTime(durationMs) : "--:--";
+        showStatus(direction + amount + "   " + target + " / " + total, false, 0);
+
+        if (durationMs > 0) {
+            progress.setProgress((int) ((seekPreviewPositionMs * 1000L) / durationMs));
+        }
+        currentTimeView.setText(target);
+
+        handler.removeCallbacks(commitSeekPreview);
+        handler.postDelayed(commitSeekPreview, 650);
+    }
+
     private void seekBy(int deltaMs, String label) {
         if (controller != null && controller.seekBy(deltaMs)) {
             showStatus(label + "   " + formatTime(controller.position()), false, 1500);
@@ -765,6 +1050,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         if (currentSource != null && currentSource.episodes != null
                 && episodeIndex < currentSource.episodes.size() - 1) {
             saveRecord(true);
+            pendingResumePositionMs = 0;
+            resumeApplied = true;
             episodeIndex++;
             playCurrent();
         } else {
@@ -775,6 +1062,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private void previousEpisode() {
         if (episodeIndex > 0) {
             saveRecord(true);
+            pendingResumePositionMs = 0;
+            resumeApplied = true;
             episodeIndex--;
             playCurrent();
         } else {
@@ -791,15 +1080,28 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     public void onPrepared(int durationMs) {
         updatePlayPauseButton();
         durationView.setText(formatTime(durationMs));
-        showStatus("开始播放", true, 1200);
+        if (pendingResumePositionMs > 0 && !resumeApplied) {
+            int target = pendingResumePositionMs;
+            pendingResumePositionMs = 0;
+            resumeApplied = true;
+            if (controller != null && controller.seekTo(target)) {
+                showStatus("已续播至 " + formatTime(target), true, 1500);
+            } else {
+                showStatus("开始播放", true, 1200);
+            }
+        } else {
+            showStatus("开始播放", true, 1200);
+        }
     }
 
     @Override
     public void onProgress(int positionMs, int durationMs) {
-        currentTimeView.setText(formatTime(positionMs));
-        durationView.setText(durationMs > 0 ? formatTime(durationMs) : "--:--");
-        if (durationMs > 0) {
-            progress.setProgress((int) ((positionMs * 1000L) / durationMs));
+        if (!seekPreviewActive) {
+            currentTimeView.setText(formatTime(positionMs));
+            durationView.setText(durationMs > 0 ? formatTime(durationMs) : "--:--");
+            if (durationMs > 0) {
+                progress.setProgress((int) ((positionMs * 1000L) / durationMs));
+            }
         }
 
         if (System.currentTimeMillis() - lastSave > 10000) saveRecord(false);
@@ -808,29 +1110,47 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     @Override
     public void onVideoSizeChanged(final int width, final int height) {
         if (width <= 0 || height <= 0) return;
+        videoWidth = width;
+        videoHeight = height;
+        applyVideoLayout();
+    }
+
+    private void applyVideoLayout() {
+        if (surfaceView == null || playerRoot == null || videoWidth <= 0 || videoHeight <= 0) return;
         playerRoot.post(new Runnable() {
-            @Override
-            public void run() {
+            @Override public void run() {
                 int containerWidth = playerRoot.getWidth();
                 int containerHeight = playerRoot.getHeight();
                 if (containerWidth <= 0 || containerHeight <= 0) return;
 
-                float videoRatio = (float) width / (float) height;
-                float containerRatio = (float) containerWidth / (float) containerHeight;
-                int targetWidth;
-                int targetHeight;
+                int targetWidth = containerWidth;
+                int targetHeight = containerHeight;
 
-                if (videoRatio > containerRatio) {
-                    targetWidth = containerWidth;
-                    targetHeight = Math.max(1, (int) (containerWidth / videoRatio));
-                } else {
-                    targetHeight = containerHeight;
-                    targetWidth = Math.max(1, (int) (containerHeight * videoRatio));
+                if (!"stretch".equals(aspectMode)) {
+                    float videoRatio = (float) videoWidth / (float) videoHeight;
+                    float containerRatio = (float) containerWidth / (float) containerHeight;
+
+                    if ("crop".equals(aspectMode)) {
+                        if (videoRatio > containerRatio) {
+                            targetHeight = containerHeight;
+                            targetWidth = Math.max(1, (int) (containerHeight * videoRatio));
+                        } else {
+                            targetWidth = containerWidth;
+                            targetHeight = Math.max(1, (int) (containerWidth / videoRatio));
+                        }
+                    } else {
+                        if (videoRatio > containerRatio) {
+                            targetWidth = containerWidth;
+                            targetHeight = Math.max(1, (int) (containerWidth / videoRatio));
+                        } else {
+                            targetHeight = containerHeight;
+                            targetWidth = Math.max(1, (int) (containerHeight * videoRatio));
+                        }
+                    }
                 }
 
-                FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                        targetWidth, targetHeight, Gravity.CENTER);
-                surfaceView.setLayoutParams(params);
+                surfaceView.setLayoutParams(new FrameLayout.LayoutParams(
+                        targetWidth, targetHeight, Gravity.CENTER));
             }
         });
     }

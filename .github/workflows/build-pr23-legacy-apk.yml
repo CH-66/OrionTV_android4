@@ -7,6 +7,12 @@ on:
     paths:
       - 'legacy-android-ics/**'
       - '.github/workflows/build-pr23-legacy-apk.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'legacy-android-ics/**'
+      - '.github/workflows/build-pr23-legacy-apk.yml'
 
 jobs:
   build:

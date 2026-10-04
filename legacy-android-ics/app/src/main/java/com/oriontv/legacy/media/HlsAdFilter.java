@@ -3,26 +3,39 @@ package com.oriontv.legacy.media;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Set;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Conservative HLS ad filtering for legacy playback.
+ * High-confidence HLS ad filtering for legacy playback.
  *
- * The filter intentionally requires explicit HLS ad signaling or a strongly ad-shaped
- * segment URI. A bare EXT-X-DISCONTINUITY is never considered an ad by itself.
+ * V2 combines explicit HLS signaling with playlist structure:
+ * - CUE-OUT/CUE-IN and paired SCTE35-OUT/SCTE35-IN boundaries.
+ * - Strong ad-shaped segment URIs.
+ * - Short foreign-host A-B-A mid-roll runs, even without DISCONTINUITY.
+ * - Short foreign-host pre-roll/post-roll runs when a dominant main-content host exists.
+ *
+ * A bare EXT-X-DISCONTINUITY is never considered an ad by itself.
  */
 public final class HlsAdFilter {
+    private static final long MAX_MIDROLL_MS = 120000L;
+    private static final long MAX_BOUNDARY_ROLL_MS = 90000L;
+    private static final long MAX_BOUNDARY_ROLL_WITHOUT_DISCONTINUITY_MS = 60000L;
+    private static final int MAX_MIDROLL_SEGMENTS = 30;
+    private static final int MAX_BOUNDARY_ROLL_SEGMENTS = 18;
+    private static final int MIN_HOST_ANALYSIS_SEGMENTS = 6;
+
     private static final Pattern EXTINF_DURATION =
             Pattern.compile("^#EXTINF:([0-9]+(?:\\.[0-9]+)?)", Pattern.CASE_INSENSITIVE);
 
     private static final Pattern STRONG_AD_URI = Pattern.compile(
-            "(?:^|[/?&._=\\-])(?:ads?|advert(?:ise(?:ment)?)?|commercial|"
-                    + "preroll|midroll|postroll|interstitial|vast)"
+            "(?:^|[/?&._=\\-])(?:ads?|adserver|adservice|adcdn|"
+                    + "advert(?:ise(?:ment)?)?|commercial|"
+                    + "preroll|midroll|postroll|interstitial|vast|vmap)"
                     + "(?:[/?&._=\\-]|$)",
             Pattern.CASE_INSENSITIVE);
 
@@ -35,18 +48,23 @@ public final class HlsAdFilter {
         public final int suppressedInterstitials;
         public final int detectedAdMarkers;
         public final boolean byteRangeBypass;
+        public final boolean filteringBypassed;
         public final String signature;
+        public final String diagnostics;
 
         Result(String playlist, int removedSegments, long removedDurationMs,
                int suppressedInterstitials, int detectedAdMarkers,
-               boolean byteRangeBypass, String signature) {
+               boolean byteRangeBypass, boolean filteringBypassed,
+               String signature, String diagnostics) {
             this.playlist = playlist;
             this.removedSegments = removedSegments;
             this.removedDurationMs = removedDurationMs;
             this.suppressedInterstitials = suppressedInterstitials;
             this.detectedAdMarkers = detectedAdMarkers;
             this.byteRangeBypass = byteRangeBypass;
+            this.filteringBypassed = filteringBypassed;
             this.signature = signature == null ? "" : signature;
+            this.diagnostics = diagnostics == null ? "" : diagnostics;
         }
 
         public boolean changed() {
@@ -60,7 +78,8 @@ public final class HlsAdFilter {
 
     public static Result filter(String playlistUrl, String body) {
         if (body == null || body.length() == 0) {
-            return new Result(body == null ? "" : body, 0, 0L, 0, 0, false, "");
+            return new Result(body == null ? "" : body,
+                    0, 0L, 0, 0, false, false, "", "");
         }
 
         String normalized = body.replace("\r", "");
@@ -69,21 +88,34 @@ public final class HlsAdFilter {
             return suppressInterstitialMetadata(normalized);
         }
 
-        // Removing byte-range segments can invalidate implicit byte offsets. For those
-        // playlists we suppress metadata-only interstitials but never delete media.
+        // Removing byte-range segments can invalidate implicit byte offsets. We therefore
+        // keep media intact and surface the ad evidence so PlayerActivity can prefer another
+        // source instead of corrupting playback.
         if (upper.indexOf("#EXT-X-BYTERANGE") >= 0) {
             Result metadataOnly = suppressInterstitialMetadata(normalized);
-            return new Result(metadataOnly.playlist, 0, 0L,
+            boolean bypassed = metadataOnly.detectedAdMarkers > 0
+                    || metadataOnly.filteringBypassed;
+            return new Result(
+                    metadataOnly.playlist,
+                    0,
+                    0L,
                     metadataOnly.suppressedInterstitials,
                     metadataOnly.detectedAdMarkers,
                     true,
-                    metadataOnly.signature);
+                    bypassed,
+                    metadataOnly.signature,
+                    appendDiagnostic(metadataOnly.diagnostics,
+                            bypassed ? "byte-range-ad-evidence" : "byte-range-media")
+            );
         }
 
-        ForeignBlockResult foreign = removeSandwichedForeignHostBlocks(playlistUrl, normalized);
+        ForeignBlockResult foreign = removeHighConfidenceForeignHostRuns(
+                playlistUrl, normalized);
         normalized = foreign.playlist;
 
         String[] lines = normalized.split("\n", -1);
+        boolean pairedScte = hasScteBoundary(lines, 1) && hasScteBoundary(lines, -1);
+
         StringBuilder out = new StringBuilder(normalized.length());
         List<String> pending = new ArrayList<String>();
         List<String> block = new ArrayList<String>();
@@ -98,8 +130,12 @@ public final class HlsAdFilter {
         long removedDurationMs = foreign.removedDurationMs;
         int suppressedInterstitials = 0;
         int detectedMarkers = foreign.removedSegments > 0 ? 1 : 0;
+        int unresolvedScteMarkers = 0;
+        int uriRemovedSegments = 0;
+
         StringBuilder signature = new StringBuilder();
         signature.append(foreign.signature);
+        String diagnostics = foreign.diagnostics;
 
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i] == null ? "" : lines[i];
@@ -109,23 +145,46 @@ public final class HlsAdFilter {
             if (isCueOut(upperLine)) {
                 adBreak = true;
                 detectedMarkers++;
+                signature.append("CO|");
+                diagnostics = appendDiagnostic(diagnostics, "cue-out");
                 continue;
             }
             if (isCueIn(upperLine)) {
                 adBreak = false;
                 justEndedAdBreak = true;
                 detectedMarkers++;
+                signature.append("CI|");
+                diagnostics = appendDiagnostic(diagnostics, "cue-in");
                 continue;
             }
-            if (isScteMarker(upperLine)) {
+
+            int scteBoundary = scteBoundaryType(upperLine);
+            if (scteBoundary != 0 && pairedScte) {
+                adBreak = scteBoundary > 0;
+                if (scteBoundary < 0) {
+                    justEndedAdBreak = true;
+                }
                 detectedMarkers++;
-                // SCTE metadata alone does not define the segment boundaries safely.
+                signature.append(scteBoundary > 0 ? "SO|" : "SI|");
+                diagnostics = appendDiagnostic(
+                        diagnostics, scteBoundary > 0 ? "scte-out" : "scte-in");
                 continue;
             }
+
             if (isInterstitialMetadata(upperLine)) {
                 suppressedInterstitials++;
                 detectedMarkers++;
                 signature.append("I|").append(trimmed).append('|');
+                diagnostics = appendDiagnostic(diagnostics, "hls-interstitial");
+                continue;
+            }
+
+            if (isScteMarker(upperLine)) {
+                detectedMarkers++;
+                unresolvedScteMarkers++;
+                signature.append("SM|").append(trimmed).append('|');
+                diagnostics = appendDiagnostic(diagnostics, "unresolved-scte");
+                // Keep the media, but remove metadata that old Stagefright does not need.
                 continue;
             }
 
@@ -159,7 +218,10 @@ public final class HlsAdFilter {
             if (drop) {
                 removedSegments++;
                 removedDurationMs += blockDurationMs(block);
-                signature.append(adBreak ? "C|" : "U|").append(trimmed).append('|');
+                if (uriAd && !adBreak) {
+                    uriRemovedSegments++;
+                }
+                signature.append(adBreak ? "B|" : "U|").append(trimmed).append('|');
             } else {
                 appendBlock(out, block, previousRemoved || justEndedAdBreak);
             }
@@ -182,6 +244,16 @@ public final class HlsAdFilter {
             appendBlock(out, pending, previousRemoved || justEndedAdBreak);
         }
 
+        if (uriRemovedSegments > 0) {
+            diagnostics = appendDiagnostic(
+                    diagnostics, "strong-ad-uri:" + uriRemovedSegments);
+        }
+
+        boolean filteringBypassed = unresolvedScteMarkers > 0 && removedSegments == 0;
+        if (filteringBypassed) {
+            diagnostics = appendDiagnostic(diagnostics, "ad-evidence-not-safely-bounded");
+        }
+
         return new Result(
                 out.toString(),
                 removedSegments,
@@ -189,7 +261,9 @@ public final class HlsAdFilter {
                 suppressedInterstitials,
                 detectedMarkers,
                 false,
-                Integer.toHexString(signature.toString().hashCode())
+                filteringBypassed,
+                Integer.toHexString(signature.toString().hashCode()),
+                diagnostics
         );
     }
 
@@ -203,10 +277,11 @@ public final class HlsAdFilter {
         boolean stripDiscontinuity;
     }
 
-    private static final class SegmentBlock {
+    private static final class HostRun {
         final List<SegmentUnit> units = new ArrayList<SegmentUnit>();
         String host;
         long durationMs;
+        boolean discontinuityBefore;
     }
 
     private static final class ForeignBlockResult {
@@ -214,17 +289,20 @@ public final class HlsAdFilter {
         final int removedSegments;
         final long removedDurationMs;
         final String signature;
+        final String diagnostics;
 
         ForeignBlockResult(String playlist, int removedSegments,
-                           long removedDurationMs, String signature) {
+                           long removedDurationMs, String signature,
+                           String diagnostics) {
             this.playlist = playlist;
             this.removedSegments = removedSegments;
             this.removedDurationMs = removedDurationMs;
             this.signature = signature == null ? "" : signature;
+            this.diagnostics = diagnostics == null ? "" : diagnostics;
         }
     }
 
-    private static ForeignBlockResult removeSandwichedForeignHostBlocks(
+    private static ForeignBlockResult removeHighConfidenceForeignHostRuns(
             String playlistUrl, String body) {
         String[] lines = body.split("\n", -1);
         List<String> header = new ArrayList<String>();
@@ -279,60 +357,94 @@ public final class HlsAdFilter {
         }
         trailer.addAll(pending);
 
-        if (units.size() < 5) {
-            return new ForeignBlockResult(body, 0, 0L, "");
+        if (units.size() < MIN_HOST_ANALYSIS_SEGMENTS) {
+            return new ForeignBlockResult(body, 0, 0L, "", "");
         }
 
-        List<SegmentBlock> blocks = new ArrayList<SegmentBlock>();
-        SegmentBlock block = null;
-        for (int i = 0; i < units.size(); i++) {
-            SegmentUnit unit = units.get(i);
-            if (block == null || (unit.discontinuityBefore && !block.units.isEmpty())) {
-                block = new SegmentBlock();
-                blocks.add(block);
-            }
-            block.units.add(unit);
-            block.durationMs += unit.durationMs;
+        List<HostRun> runs = buildHostRuns(units);
+        if (runs.size() < 2) {
+            return new ForeignBlockResult(body, 0, 0L, "", "");
         }
 
-        for (int i = 0; i < blocks.size(); i++) {
-            SegmentBlock b = blocks.get(i);
-            b.host = stableHost(b.units);
-        }
+        String dominantHost = dominantHost(units);
+        int dominantCount = countHost(units, dominantHost);
+        int total = units.size();
 
         int removed = 0;
         long removedMs = 0L;
         StringBuilder signature = new StringBuilder();
+        String diagnostics = "";
 
-        for (int i = 1; i + 1 < blocks.size(); i++) {
-            SegmentBlock prev = blocks.get(i - 1);
-            SegmentBlock mid = blocks.get(i);
-            SegmentBlock next = blocks.get(i + 1);
+        // High-confidence mid-roll: A -> short B -> A. This works with or without
+        // EXT-X-DISCONTINUITY and avoids relying on ad-specific URI names.
+        for (int i = 1; i + 1 < runs.size(); i++) {
+            HostRun prev = runs.get(i - 1);
+            HostRun mid = runs.get(i);
+            HostRun next = runs.get(i + 1);
 
+            if (!sameHost(prev.host, next.host)) continue;
+            if (sameHost(prev.host, mid.host)) continue;
             if (prev.host == null || mid.host == null || next.host == null) continue;
-            if (!prev.host.equalsIgnoreCase(next.host)) continue;
-            if (prev.host.equalsIgnoreCase(mid.host)) continue;
             if (prev.units.size() < 2 || next.units.size() < 2) continue;
-            if (mid.units.size() == 0 || mid.units.size() > 30) continue;
-            if (mid.durationMs <= 0L || mid.durationMs > 120000L) continue;
+            if (!isShortAdRun(mid, MAX_MIDROLL_MS, MAX_MIDROLL_SEGMENTS)) continue;
 
-            for (int j = 0; j < mid.units.size(); j++) {
-                SegmentUnit unit = mid.units.get(j);
-                if (!unit.drop) {
-                    unit.drop = true;
-                    removed++;
-                    removedMs += unit.durationMs;
-                    signature.append("H|").append(unit.uri).append('|');
-                }
-            }
-
+            int[] result = markRunDropped(mid, signature, "M");
+            removed += result[0];
+            removedMs += result[1];
             if (!next.units.isEmpty()) {
                 next.units.get(0).stripDiscontinuity = true;
+            }
+            diagnostics = appendDiagnostic(
+                    diagnostics,
+                    "midroll-host:" + shortHost(mid.host)
+                            + ":" + mid.durationMs + "ms"
+            );
+        }
+
+        // Boundary pre-roll/post-roll needs stronger evidence than A-B-A:
+        // a short foreign host plus a clearly dominant main-content host.
+        if (dominantHost != null && dominantCount >= 4
+                && dominantCount * 100 >= total * 65) {
+            HostRun first = runs.get(0);
+            HostRun second = runs.size() > 1 ? runs.get(1) : null;
+            if (!sameHost(first.host, dominantHost)
+                    && second != null
+                    && sameHost(second.host, dominantHost)
+                    && boundaryRunLooksLikeAd(first, second.discontinuityBefore,
+                    dominantCount, total)) {
+                int[] result = markRunDropped(first, signature, "P");
+                removed += result[0];
+                removedMs += result[1];
+                if (!second.units.isEmpty()) {
+                    second.units.get(0).stripDiscontinuity = true;
+                }
+                diagnostics = appendDiagnostic(
+                        diagnostics,
+                        "preroll-host:" + shortHost(first.host)
+                                + ":" + first.durationMs + "ms"
+                );
+            }
+
+            HostRun last = runs.get(runs.size() - 1);
+            HostRun beforeLast = runs.size() > 1 ? runs.get(runs.size() - 2) : null;
+            if (!sameHost(last.host, dominantHost)
+                    && beforeLast != null
+                    && sameHost(beforeLast.host, dominantHost)
+                    && boundaryRunLooksLikeAd(last, last.discontinuityBefore,
+                    dominantCount, total)) {
+                int[] result = markRunDropped(last, signature, "T");
+                removed += result[0];
+                removedMs += result[1];
+                diagnostics = appendDiagnostic(
+                        diagnostics,
+                        "postroll-host:" + shortHost(last.host)
+                                + ":" + last.durationMs + "ms"
+                );
             }
         }
 
         if (removed == 0) {
-            return new ForeignBlockResult(body, 0, 0L, "");
+            return new ForeignBlockResult(body, 0, 0L, "", "");
         }
 
         StringBuilder out = new StringBuilder(body.length());
@@ -355,23 +467,117 @@ public final class HlsAdFilter {
         }
 
         return new ForeignBlockResult(
-                out.toString(), removed, removedMs,
-                Integer.toHexString(signature.toString().hashCode()));
+                out.toString(),
+                removed,
+                removedMs,
+                Integer.toHexString(signature.toString().hashCode()),
+                diagnostics
+        );
     }
 
-    private static String stableHost(List<SegmentUnit> units) {
-        if (units == null || units.size() == 0) return null;
-        String host = null;
+    private static List<HostRun> buildHostRuns(List<SegmentUnit> units) {
+        List<HostRun> runs = new ArrayList<HostRun>();
+        HostRun current = null;
+
         for (int i = 0; i < units.size(); i++) {
-            String candidate = units.get(i).host;
-            if (candidate == null || candidate.length() == 0) return null;
-            if (host == null) {
-                host = candidate;
-            } else if (!host.equalsIgnoreCase(candidate)) {
-                return null;
+            SegmentUnit unit = units.get(i);
+            boolean boundary = current == null
+                    || unit.discontinuityBefore
+                    || !sameHost(current.host, unit.host);
+
+            if (boundary) {
+                current = new HostRun();
+                current.host = unit.host;
+                current.discontinuityBefore = unit.discontinuityBefore;
+                runs.add(current);
+            }
+
+            current.units.add(unit);
+            current.durationMs += unit.durationMs;
+        }
+
+        return runs;
+    }
+
+    private static String dominantHost(List<SegmentUnit> units) {
+        Map<String, Integer> counts = new LinkedHashMap<String, Integer>();
+        for (int i = 0; i < units.size(); i++) {
+            String host = units.get(i).host;
+            if (host == null || host.length() == 0) continue;
+            Integer current = counts.get(host);
+            counts.put(host, Integer.valueOf(current == null ? 1 : current.intValue() + 1));
+        }
+
+        String best = null;
+        int bestCount = 0;
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            int count = entry.getValue() == null ? 0 : entry.getValue().intValue();
+            if (count > bestCount) {
+                best = entry.getKey();
+                bestCount = count;
             }
         }
-        return host;
+        return best;
+    }
+
+    private static int countHost(List<SegmentUnit> units, String host) {
+        if (host == null) return 0;
+        int count = 0;
+        for (int i = 0; i < units.size(); i++) {
+            if (sameHost(host, units.get(i).host)) count++;
+        }
+        return count;
+    }
+
+    private static boolean boundaryRunLooksLikeAd(HostRun run,
+                                                   boolean transitionHasDiscontinuity,
+                                                   int dominantCount,
+                                                   int totalCount) {
+        if (run == null || run.host == null) return false;
+        if (!isShortAdRun(run, MAX_BOUNDARY_ROLL_MS, MAX_BOUNDARY_ROLL_SEGMENTS)) {
+            return false;
+        }
+
+        if (transitionHasDiscontinuity) {
+            return true;
+        }
+
+        // Without a discontinuity marker, require a shorter boundary run and stronger
+        // dominance from the main host.
+        return run.durationMs <= MAX_BOUNDARY_ROLL_WITHOUT_DISCONTINUITY_MS
+                && dominantCount * 100 >= totalCount * 70;
+    }
+
+    private static boolean isShortAdRun(HostRun run, long maxDurationMs, int maxSegments) {
+        return run != null
+                && run.units.size() > 0
+                && run.units.size() <= maxSegments
+                && run.durationMs > 0L
+                && run.durationMs <= maxDurationMs;
+    }
+
+    private static int[] markRunDropped(HostRun run, StringBuilder signature, String kind) {
+        int removed = 0;
+        long removedMs = 0L;
+        for (int i = 0; i < run.units.size(); i++) {
+            SegmentUnit unit = run.units.get(i);
+            if (unit.drop) continue;
+            unit.drop = true;
+            removed++;
+            removedMs += unit.durationMs;
+            signature.append(kind).append('|').append(unit.uri).append('|');
+        }
+        return new int[] { removed, (int) Math.min(Integer.MAX_VALUE, removedMs) };
+    }
+
+    private static boolean sameHost(String left, String right) {
+        if (left == null || right == null) return left == right;
+        return left.equalsIgnoreCase(right);
+    }
+
+    private static String shortHost(String host) {
+        if (host == null) return "?";
+        return host.length() <= 48 ? host : host.substring(0, 48);
     }
 
     private static boolean containsDiscontinuity(List<String> lines) {
@@ -417,7 +623,8 @@ public final class HlsAdFilter {
                 String nestedHost = uriHost(nestedResolved);
                 if (nestedHost != null) return nestedHost;
             }
-            return resolved.getHost();
+            String host = resolved.getHost();
+            return host == null ? null : host.toLowerCase(Locale.US);
         } catch (RuntimeException ignored) {
             return null;
         }
@@ -449,7 +656,9 @@ public final class HlsAdFilter {
         try {
             URI uri = URI.create(value);
             String host = uri.getHost();
-            if (host != null && host.length() > 0) return host.toLowerCase(Locale.US);
+            if (host != null && host.length() > 0) {
+                return host.toLowerCase(Locale.US);
+            }
         } catch (RuntimeException ignored) {
         }
         return null;
@@ -460,7 +669,9 @@ public final class HlsAdFilter {
         StringBuilder out = new StringBuilder(body.length());
         int suppressed = 0;
         int markers = 0;
+        int unresolvedScte = 0;
         StringBuilder signature = new StringBuilder();
+        String diagnostics = "";
 
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i] == null ? "" : lines[i];
@@ -470,17 +681,32 @@ public final class HlsAdFilter {
                 suppressed++;
                 markers++;
                 signature.append("I|").append(line.trim()).append('|');
+                diagnostics = appendDiagnostic(diagnostics, "hls-interstitial");
                 continue;
             }
+
             if (isCueOut(upper) || isCueIn(upper) || isScteMarker(upper)) {
                 markers++;
+                if (isScteMarker(upper)) unresolvedScte++;
             }
             appendLine(out, line);
         }
 
+        boolean bypassed = unresolvedScte > 0;
+        if (bypassed) {
+            diagnostics = appendDiagnostic(diagnostics, "scte-without-media-boundaries");
+        }
+
         return new Result(
-                out.toString(), 0, 0L, suppressed, markers, false,
-                Integer.toHexString(signature.toString().hashCode())
+                out.toString(),
+                0,
+                0L,
+                suppressed,
+                markers,
+                false,
+                bypassed,
+                Integer.toHexString(signature.toString().hashCode()),
+                diagnostics
         );
     }
 
@@ -495,7 +721,44 @@ public final class HlsAdFilter {
 
     private static boolean isScteMarker(String upperLine) {
         return upperLine.startsWith("#EXT-OATCLS-SCTE35")
-                || upperLine.startsWith("#EXT-X-SCTE35");
+                || upperLine.startsWith("#EXT-X-SCTE35")
+                || (upperLine.startsWith("#EXT-X-DATERANGE")
+                && upperLine.indexOf("SCTE35") >= 0);
+    }
+
+    private static int scteBoundaryType(String upperLine) {
+        if (!isScteMarker(upperLine)) return 0;
+
+        if (upperLine.indexOf("SCTE35-IN") >= 0
+                || upperLine.indexOf("CUE-IN") >= 0
+                || upperLine.indexOf("TYPE=IN") >= 0
+                || upperLine.indexOf("TYPE=\"IN\"") >= 0
+                || upperLine.indexOf("EVENT=IN") >= 0
+                || upperLine.indexOf("EVENT=\"IN\"") >= 0
+                || upperLine.indexOf("IN=YES") >= 0) {
+            return -1;
+        }
+
+        if (upperLine.indexOf("SCTE35-OUT") >= 0
+                || upperLine.indexOf("CUE-OUT") >= 0
+                || upperLine.indexOf("TYPE=OUT") >= 0
+                || upperLine.indexOf("TYPE=\"OUT\"") >= 0
+                || upperLine.indexOf("EVENT=OUT") >= 0
+                || upperLine.indexOf("EVENT=\"OUT\"") >= 0
+                || upperLine.indexOf("OUT=YES") >= 0) {
+            return 1;
+        }
+
+        return 0;
+    }
+
+    private static boolean hasScteBoundary(String[] lines, int wanted) {
+        if (lines == null) return false;
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i] == null ? "" : lines[i].trim().toUpperCase(Locale.US);
+            if (scteBoundaryType(line) == wanted) return true;
+        }
+        return false;
     }
 
     private static boolean isInterstitialMetadata(String upperLine) {
@@ -545,6 +808,13 @@ public final class HlsAdFilter {
             }
             appendLine(out, line == null ? "" : line);
         }
+    }
+
+    private static String appendDiagnostic(String current, String item) {
+        if (item == null || item.length() == 0) return current == null ? "" : current;
+        if (current == null || current.length() == 0) return item;
+        if (current.indexOf(item) >= 0) return current;
+        return current + "," + item;
     }
 
     private static void appendLine(StringBuilder out, String line) {

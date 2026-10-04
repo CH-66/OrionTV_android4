@@ -379,6 +379,15 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
     public void surfaceDestroyed(SurfaceHolder holder) {
         surfaceReady = false;
         if (mediaPlayer != null) {
+            if (prepared) {
+                try {
+                    if (mediaPlayer.isPlaying()) {
+                        mediaPlayer.pause();
+                        resumeAfterLifecyclePause = true;
+                    }
+                } catch (RuntimeException ignored) {
+                }
+            }
             try {
                 mediaPlayer.setDisplay(null);
             } catch (RuntimeException ignored) {

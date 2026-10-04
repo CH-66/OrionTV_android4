@@ -86,6 +86,9 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private FrameLayout nextEpisodeOverlay;
     private TextView nextEpisodeText;
     private boolean nextEpisodePromptVisible;
+    private FrameLayout errorOverlay;
+    private TextView errorMessageText;
+    private boolean errorVisible;
     private int nextEpisodeCountdown;
     private Button previousButton;
     private Button playPauseButton;
@@ -231,6 +234,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         buildDrawer();
         buildResumeOverlay();
         buildNextEpisodeOverlay();
+        buildErrorOverlay();
 
         setContentView(playerRoot);
         controller = new LegacyPlayerController(this, surfaceView, this);
@@ -675,6 +679,110 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private void hideResumePrompt() {
         resumePromptVisible = false;
         resumeOverlay.setVisibility(View.GONE);
+    }
+
+    private void buildErrorOverlay() {
+        errorOverlay = new FrameLayout(this);
+        errorOverlay.setBackgroundColor(0xcc000000);
+        errorOverlay.setVisibility(View.GONE);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.setPadding(dp(34), dp(28), dp(34), dp(28));
+        card.setBackgroundDrawable(roundedBackground(0xf51a1e24, 18, 1, 0x555f6a78));
+
+        TextView heading = new TextView(this);
+        heading.setText("播放失败");
+        heading.setTextColor(Color.WHITE);
+        heading.setTextSize(scaledSp(26));
+        heading.setGravity(Gravity.CENTER);
+        card.addView(heading, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+
+        errorMessageText = new TextView(this);
+        errorMessageText.setTextColor(0xffc1c8d2);
+        errorMessageText.setTextSize(scaledSp(15));
+        errorMessageText.setGravity(Gravity.CENTER);
+        errorMessageText.setPadding(dp(8), dp(4), dp(8), dp(18));
+        card.addView(errorMessageText, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(78)));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER);
+
+        final Button retry = playerButton("重试当前线路", true);
+        final Button chooseSource = playerButton("选择线路", false);
+        final Button exit = playerButton("退出播放器", false);
+        actions.addView(retry);
+        actions.addView(chooseSource);
+        actions.addView(exit);
+        card.addView(actions, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
+
+        retry.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                selector.reset();
+                hideErrorOverlay();
+                showPlaybackState("正在重新连接…", true);
+                playCurrent();
+            }
+        });
+        chooseSource.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                hideErrorOverlay();
+                showControls();
+                openSourceDrawer();
+            }
+        });
+        exit.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                finish();
+            }
+        });
+
+        errorOverlay.addView(card, new FrameLayout.LayoutParams(
+                dp(620), dp(260), Gravity.CENTER));
+        playerRoot.addView(errorOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+    }
+
+    private void showErrorOverlay(String message) {
+        errorVisible = true;
+        handler.removeCallbacks(hideChrome);
+        handler.removeCallbacks(hideStatus);
+        handler.removeCallbacks(commitSeekPreview);
+        hidePlaybackState();
+        hideNextEpisodePrompt();
+        statusView.setVisibility(View.GONE);
+        topBar.setVisibility(View.GONE);
+        bottomPanel.setVisibility(View.GONE);
+        controlsVisible = false;
+
+        String sourceName = safeSourceName(currentSource);
+        errorMessageText.setText(message + "\n当前线路：" + sourceName
+                + "。可重试、手动切换线路或退出。");
+        errorOverlay.setVisibility(View.VISIBLE);
+        errorOverlay.bringToFront();
+
+        errorOverlay.post(new Runnable() {
+            @Override public void run() {
+                View card = errorOverlay.getChildAt(0);
+                if (card instanceof ViewGroup) {
+                    View actions = ((ViewGroup) card).getChildAt(2);
+                    if (actions instanceof ViewGroup && ((ViewGroup) actions).getChildCount() > 0) {
+                        ((ViewGroup) actions).getChildAt(0).requestFocus();
+                    }
+                }
+            }
+        });
+    }
+
+    private void hideErrorOverlay() {
+        errorVisible = false;
+        if (errorOverlay != null) errorOverlay.setVisibility(View.GONE);
     }
 
     private void buildNextEpisodeOverlay() {
@@ -1150,6 +1258,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         }
 
         updateMediaLabels();
+        hideErrorOverlay();
         hideNextEpisodePrompt();
         showPlaybackState("正在连接播放线路…", true);
 
@@ -1192,7 +1301,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     }
 
     private void hideControls() {
-        if (drawerVisible) return;
+        if (drawerVisible || errorVisible) return;
         if (controller != null && !controller.isPlaying()) return;
         controlsVisible = false;
         topBar.setVisibility(View.GONE);
@@ -1218,7 +1327,9 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         int key = event.getKeyCode();
 
         if (key == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_DOWN) {
-            if (nextEpisodePromptVisible) {
+            if (errorVisible) {
+                finish();
+            } else if (nextEpisodePromptVisible) {
                 hideNextEpisodePrompt();
                 showControls();
                 if (playPauseButton != null) playPauseButton.requestFocus();
@@ -1234,7 +1345,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             return true;
         }
 
-        if ((drawerVisible || resumePromptVisible || nextEpisodePromptVisible)
+        if ((drawerVisible || resumePromptVisible || nextEpisodePromptVisible || errorVisible)
                 && isRemoteNavigationKey(key)) {
             return super.dispatchKeyEvent(event);
         }
@@ -1505,9 +1616,9 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         }
 
         if (LegacyHttpCompat.isTlsProblem(new RuntimeException(message))) {
-            showStatus(LegacyHttpCompat.buildCompatMessage("播放"), true, 0);
+            showErrorOverlay(LegacyHttpCompat.buildCompatMessage("播放"));
         } else {
-            showStatus("该视频暂时无法播放", true, 0);
+            showErrorOverlay("所有可用线路均无法播放当前视频");
         }
     }
 

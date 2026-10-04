@@ -9,7 +9,7 @@ on:
       - '.github/workflows/build-pr23-legacy-apk.yml'
   pull_request:
     branches:
-      - main
+      - ci/pr23-build-base
     paths:
       - 'legacy-android-ics/**'
       - '.github/workflows/build-pr23-legacy-apk.yml'
@@ -21,6 +21,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Java 17 for sdkmanager
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -102,5 +108,3 @@ jobs:
             build-info.txt
           if-no-files-found: error
           retention-days: 7
-# synchronize trigger for PR #24
-# rebuild after sdkmanager JDK fix

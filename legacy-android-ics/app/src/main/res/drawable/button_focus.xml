@@ -1,14 +1,23 @@
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">
-            <solid android:color="@color/orion_focus" />
-            <corners android:radius="4dp" />
+            <solid android:color="@color/orion_selected" />
+            <stroke android:width="2dp" android:color="@color/orion_focus" />
+            <corners android:radius="10dp" />
+        </shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#254A32" />
+            <stroke android:width="1dp" android:color="@color/orion_accent" />
+            <corners android:radius="10dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="#2A3036" />
-            <corners android:radius="4dp" />
+            <solid android:color="@color/orion_panel" />
+            <stroke android:width="1dp" android:color="#2A3930" />
+            <corners android:radius="10dp" />
         </shape>
     </item>
 </selector>

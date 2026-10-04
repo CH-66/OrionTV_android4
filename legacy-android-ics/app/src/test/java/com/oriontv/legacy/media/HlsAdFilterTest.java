@@ -135,6 +135,26 @@ public class HlsAdFilterTest {
     }
 
     @Test
+    public void unresolvedScteStillRequestsFallbackWhenUriAdWasRemoved() {
+        String body = "#EXTM3U\\n"
+                + seg("https://video.example.com/v1.ts") + "\\n"
+                + "#EXT-X-SCTE35:0xFC3020\\n"
+                + seg("https://video.example.com/ads/preroll.ts") + "\\n"
+                + seg("https://video.example.com/v2.ts") + "\\n"
+                + seg("https://video.example.com/v3.ts") + "\\n"
+                + seg("https://video.example.com/v4.ts") + "\\n"
+                + seg("https://video.example.com/v5.ts") + "\\n"
+                + "#EXT-X-ENDLIST";
+
+        HlsAdFilter.Result result = HlsAdFilter.filter(
+                "https://video.example.com/master.m3u8", body);
+
+        assertEquals(1, result.removedSegments);
+        assertTrue(result.filteringBypassed);
+        assertFalse(result.playlist.contains("/ads/preroll.ts"));
+    }
+
+    @Test
     public void byteRangeAdEvidenceNeverDeletesMedia() {
         String body = "#EXTM3U\n"
                 + "#EXT-X-BYTERANGE:1000@0\n"

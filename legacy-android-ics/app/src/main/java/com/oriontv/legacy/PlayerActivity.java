@@ -52,7 +52,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private static final int ID_SETTINGS = 2108;
 
     private final Gson gson = new Gson();
-    private final PlaybackSourceSelector selector = new PlaybackSourceSelector();
+    private PlaybackSourceSelector selector;
     private final android.os.Handler handler = new android.os.Handler();
 
     private ArrayList<SearchResult> sources = new ArrayList<SearchResult>();
@@ -112,6 +112,9 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private boolean resumePromptVisible;
     private boolean drawerVisible;
     private boolean controlsVisible;
+    private int lastShownBlockedAdSegments;
+    private int lastShownSuppressedInterstitials;
+    private boolean adBypassHandled;
 
     private final Runnable hideChrome = new Runnable() {
         @Override
@@ -168,6 +171,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        selector = new PlaybackSourceSelector(app.prefs());
         parseIntent();
         loadPlayerSettings();
         initUiScale();
@@ -217,6 +221,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             }
         }
 
+        episodeIndex = getIntent().getIntExtra("episode_index", 0);
+
         String source = getIntent().getStringExtra("source");
         for (int i = 0; i < sources.size(); i++) {
             SearchResult item = sources.get(i);
@@ -225,8 +231,22 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
                 break;
             }
         }
-        if (currentSource == null && sources.size() > 0) currentSource = sources.get(0);
-        episodeIndex = getIntent().getIntExtra("episode_index", 0);
+
+        // When no source is specified, choose by ad reputation first, then resolution.
+        if (currentSource == null && sources.size() > 0) {
+            currentSource = selector.best(sources, episodeIndex);
+            if (currentSource == null) currentSource = sources.get(0);
+        } else if (currentSource != null && currentSource.source != null
+                && app.prefs().getSourceAdPenalty(currentSource.source) > 0) {
+            // DetailActivity always sends its selected source. For a source already known
+            // to inject ads, silently prefer a cleaner playable source before playback.
+            SearchResult preferred = selector.best(sources, episodeIndex);
+            if (preferred != null && preferred.source != null
+                    && app.prefs().getSourceAdPenalty(preferred.source)
+                    < app.prefs().getSourceAdPenalty(currentSource.source)) {
+                currentSource = preferred;
+            }
+        }
     }
 
     private void buildUi() {
@@ -1048,6 +1068,10 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             if (item != null && item.resolution != null && item.resolution.length() > 0) {
                 label += "   ·   " + item.resolution;
             }
+            if (item != null && item.source != null
+                    && app.prefs().getSourceAdPenalty(item.source) > 0) {
+                label += "   ·   检测到广告";
+            }
             if (!playable) label += "   ·   当前集不可用";
 
             Button button = drawerWideButton(label, selected, playable);
@@ -1293,7 +1317,11 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         showPlaybackState("正在连接播放线路…", true);
 
         String originalUrl = currentSource.episodes.get(episodeIndex);
+        app.playbackProxy().setPlaybackContext(currentSource.source, safeSourceName(currentSource));
         app.playbackProxy().resetPlaybackStats();
+        lastShownBlockedAdSegments = 0;
+        lastShownSuppressedInterstitials = 0;
+        adBypassHandled = false;
         if (cacheStatusView != null) {
             cacheStatusView.setVisibility(View.GONE);
             cacheStatusView.setText("");
@@ -1341,45 +1369,100 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         if (cacheStatusView == null || progress == null || app == null) return;
 
         PlaybackProxyServer.CacheStats stats = app.playbackProxy().cacheStats();
-        if (stats == null || !stats.enabled || stats.totalSegments <= 0) {
+        if (stats == null || !stats.enabled) {
             cacheStatusView.setVisibility(View.GONE);
             return;
         }
 
-        int secondary = stats.bufferedUntilPermille;
-        if (secondary < progress.getProgress()) {
-            secondary = progress.getProgress();
+        if (stats.adFilteringBypassed && !adBypassHandled) {
+            adBypassHandled = true;
+            if (switchAwayFromUnfilterableAdSource()) {
+                return;
+            }
+            showStatus("检测到广告，但当前线路格式无法安全跳过", true, 2600);
         }
-        if (secondary > 1000) secondary = 1000;
-        progress.setSecondaryProgress(secondary);
+
+        if (stats.blockedAdSegments > lastShownBlockedAdSegments
+                || stats.suppressedInterstitials > lastShownSuppressedInterstitials) {
+            lastShownBlockedAdSegments = stats.blockedAdSegments;
+            lastShownSuppressedInterstitials = stats.suppressedInterstitials;
+            int totalBlocked = stats.blockedAdSegments + stats.suppressedInterstitials;
+            if (totalBlocked > 0) {
+                showStatus("已跳过广告" + (stats.blockedAdSegments > 0
+                        ? " " + stats.blockedAdSegments + " 段" : ""), false, 1400);
+            }
+        }
+
+        if (stats.totalSegments > 0) {
+            int secondary = stats.bufferedUntilPermille;
+            if (secondary < progress.getProgress()) {
+                secondary = progress.getProgress();
+            }
+            if (secondary > 1000) secondary = 1000;
+            progress.setSecondaryProgress(secondary);
+        }
 
         StringBuilder text = new StringBuilder();
-        int durationMs = controller == null ? 0 : controller.duration();
-        if (durationMs > 0 && stats.bufferedUntilPermille > 0) {
-            int bufferedMs = (int) ((durationMs * (long) stats.bufferedUntilPermille) / 1000L);
-            text.append("已缓存至 ").append(formatTime(bufferedMs)).append(" · ");
-        }
-
-        if (stats.lookAheadTarget > 0) {
-            text.append("预缓存 ")
-                    .append(stats.lookAheadReady)
-                    .append("/")
-                    .append(stats.lookAheadTarget);
-            if (stats.lookAheadPercent < 100) {
-                text.append(" · ").append(stats.lookAheadPercent).append("%");
+        if (stats.totalSegments > 0) {
+            int durationMs = controller == null ? 0 : controller.duration();
+            if (durationMs > 0 && stats.bufferedUntilPermille > 0) {
+                int bufferedMs = (int) ((durationMs * (long) stats.bufferedUntilPermille) / 1000L);
+                text.append("已缓存至 ").append(formatTime(bufferedMs)).append(" · ");
             }
+
+            if (stats.lookAheadTarget > 0) {
+                text.append("预缓存 ")
+                        .append(stats.lookAheadReady)
+                        .append("/")
+                        .append(stats.lookAheadTarget);
+                if (stats.lookAheadPercent < 100) {
+                    text.append(" · ").append(stats.lookAheadPercent).append("%");
+                }
+            } else {
+                text.append("缓存就绪");
+            }
+
+            text.append(" · ").append(formatCacheBytes(stats.cachedBytes));
+
+            if (stats.prefetchingSegments > 0 && stats.lookAheadPercent < 100) {
+                text.append(" · 缓存中");
+            }
+        }
+
+        int blockedTotal = stats.blockedAdSegments + stats.suppressedInterstitials;
+        if (blockedTotal > 0) {
+            if (text.length() > 0) text.append(" · ");
+            text.append("已拦截广告 ").append(blockedTotal);
+            if (stats.blockedAdDurationMs >= 1000L) {
+                text.append(" · 约 ")
+                        .append(Math.max(1L, stats.blockedAdDurationMs / 1000L))
+                        .append(" 秒");
+            }
+        }
+
+        if (text.length() == 0) {
+            cacheStatusView.setVisibility(View.GONE);
         } else {
-            text.append("缓存就绪");
+            cacheStatusView.setText(text.toString());
+            cacheStatusView.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private boolean switchAwayFromUnfilterableAdSource() {
+        if (currentSource == null || selector == null) return false;
+
+        selector.markFailed(currentSource.source);
+        SearchResult fallback = selector.next(sources, currentSource.source, episodeIndex);
+        if (fallback == null) {
+            return false;
         }
 
-        text.append(" · ").append(formatCacheBytes(stats.cachedBytes));
-
-        if (stats.prefetchingSegments > 0 && stats.lookAheadPercent < 100) {
-            text.append(" · 缓存中");
-        }
-
-        cacheStatusView.setText(text.toString());
-        cacheStatusView.setVisibility(View.VISIBLE);
+        String oldName = safeSourceName(currentSource);
+        currentSource = fallback;
+        showStatus(oldName + " 含无法安全过滤的广告，切换到 "
+                + safeSourceName(fallback), true, 2200);
+        playCurrent();
+        return true;
     }
 
     private String formatCacheBytes(long bytes) {

@@ -76,26 +76,18 @@ jobs:
           fi
           echo "build_type=$build_type" >> "$GITHUB_OUTPUT"
 
-      # Stable signing verification trigger
       - name: Cache stable Android signing key
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
           key: oriontv-legacy-debug-keystore-v1
 
-      - name: Ensure debug signing key exists
+      - name: Verify stable Android signing key
         run: |
-          mkdir -p "$HOME/.android"
           if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            keytool -genkeypair -v \
-              -keystore "$HOME/.android/debug.keystore" \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
+            echo "Stable OrionTV signing key cache is missing."
+            echo "Refusing to generate a new key because that would break APK upgrade compatibility."
+            exit 1
           fi
 
       - name: Build legacy APK

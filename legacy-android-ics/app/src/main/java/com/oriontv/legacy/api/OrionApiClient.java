@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.LruCache;
 import android.widget.ImageView;
 
 import com.google.gson.Gson;
@@ -47,6 +48,14 @@ public class OrionApiClient {
     private final OkHttpClient client;
     private final Gson gson = new Gson();
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final LruCache<String, Bitmap> imageMemoryCache =
+            new LruCache<String, Bitmap>(6 * 1024 * 1024) {
+                @Override
+                protected int sizeOf(String key, Bitmap value) {
+                    if (value == null) return 0;
+                    return value.getRowBytes() * value.getHeight();
+                }
+            };
 
     public OrionApiClient(Context context, PreferencesStore preferencesStore) {
         this.context = context.getApplicationContext();
@@ -96,10 +105,27 @@ public class OrionApiClient {
 
     public void loadImage(final String url, final ImageView target, final int placeholderResId) {
         if (target == null) return;
+
         if (url == null || url.length() == 0) {
+            target.setTag(null);
             target.setImageResource(placeholderResId);
             return;
         }
+
+        Bitmap cached = imageMemoryCache.get(url);
+        if (cached != null && !cached.isRecycled()) {
+            target.setTag(url);
+            target.setImageBitmap(cached);
+            return;
+        }
+
+        // GridView may ask for the same visible cell again when only focus changes.
+        // Do not reset it to the placeholder or start another HTTP request.
+        Object currentTag = target.getTag();
+        if (currentTag != null && url.equals(currentTag.toString())) {
+            return;
+        }
+
         target.setTag(url);
         target.setImageResource(placeholderResId);
 
@@ -112,30 +138,27 @@ public class OrionApiClient {
         client.newCall(builder.build()).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                main.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        Object tag = target.getTag();
-                        if (tag != null && url.equals(tag.toString())) {
-                            target.setImageResource(placeholderResId);
-                        }
-                    }
-                });
+                markImageLoadFailed(url, target, placeholderResId);
             }
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
                 if (response == null || !response.isSuccessful() || response.body() == null) {
                     if (response != null) response.close();
+                    markImageLoadFailed(url, target, placeholderResId);
                     return;
                 }
+
                 InputStream stream = null;
                 try {
                     stream = response.body().byteStream();
                     final Bitmap bitmap = BitmapFactory.decodeStream(stream);
                     if (bitmap == null) {
+                        markImageLoadFailed(url, target, placeholderResId);
                         return;
                     }
+
+                    imageMemoryCache.put(url, bitmap);
                     main.post(new Runnable() {
                         @Override
                         public void run() {
@@ -150,6 +173,22 @@ public class OrionApiClient {
                         stream.close();
                     }
                     response.close();
+                }
+            }
+        });
+    }
+
+    private void markImageLoadFailed(final String url,
+                                     final ImageView target,
+                                     final int placeholderResId) {
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                Object tag = target.getTag();
+                if (tag != null && url.equals(tag.toString())) {
+                    // Clear the tag so a later rebind can retry the failed image.
+                    target.setTag(null);
+                    target.setImageResource(placeholderResId);
                 }
             }
         });

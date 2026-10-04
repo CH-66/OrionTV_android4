@@ -24,6 +24,8 @@ import com.oriontv.legacy.net.LegacyHttpCompat;
 import com.oriontv.legacy.ui.Ui;
 
 import java.lang.reflect.Type;
+import java.net.URLEncoder;
+import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 
 public class PlayerActivity extends BaseActivity implements LegacyPlayerController.Listener {
@@ -39,9 +41,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private LinearLayout controls;
     private Button playPauseButton;
     private long lastSave;
-    private String currentOriginalUrl;
-    private boolean tryingDirectHttps;
-    private boolean triedProxyFallback;
+    private static final String VIDEO_PROXY_BASE = "http://tvproxy.t2t.cc.cd/v1";
+    private static final String VIDEO_PROXY_TOKEN = "4pCCnLfe_qROZ0cGRF1tU1CigWgHDSwNvdbhAsP4Q04";
     private final android.os.Handler handler = new android.os.Handler();
     private final Runnable hideOverlay = new Runnable() {
         @Override
@@ -204,21 +205,27 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             return;
         }
         String originalUrl = currentSource.episodes.get(episodeIndex);
-        currentOriginalUrl = originalUrl;
-        triedProxyFallback = false;
         title.setText(currentSource.title + " / " + currentSource.source_name + " / 第" + (episodeIndex + 1) + "集");
         showOverlay("正在加载第" + (episodeIndex + 1) + "集");
 
-        // Android 4.0.4's Java TLS stack cannot negotiate with many modern HTTPS
-        // video hosts. Let FFmpeg/IjkPlayer try HTTPS directly first. If that
-        // fails, onError() falls back once to the legacy local proxy.
-        if (originalUrl != null && originalUrl.toLowerCase().startsWith("https://")) {
-            tryingDirectHttps = true;
-            controller.load(originalUrl);
-        } else {
-            tryingDirectHttps = false;
-            controller.load(app.playbackProxy().proxyUrl(originalUrl));
+        String playableUrl = buildPlayableUrl(originalUrl);
+        controller.load(playableUrl);
+    }
+
+    private String buildPlayableUrl(String originalUrl) {
+        if (originalUrl == null || originalUrl.length() == 0) {
+            return originalUrl;
         }
+        String lower = originalUrl.toLowerCase();
+        if (lower.startsWith("https://")) {
+            try {
+                return VIDEO_PROXY_BASE + "?u=" + URLEncoder.encode(originalUrl, "UTF-8")
+                        + "&k=" + URLEncoder.encode(VIDEO_PROXY_TOKEN, "UTF-8");
+            } catch (UnsupportedEncodingException ignored) {
+            }
+        }
+        return originalUrl;
+    }
     }
 
     private void showOverlay(String text) {
@@ -341,17 +348,6 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     @Override
     public void onError(String message) {
         updatePlayPauseButton();
-
-        if (tryingDirectHttps && !triedProxyFallback && currentOriginalUrl != null) {
-            tryingDirectHttps = false;
-            triedProxyFallback = true;
-            String proxyUrl = app.playbackProxy().proxyUrl(currentOriginalUrl);
-            if (proxyUrl != null && !proxyUrl.equals(currentOriginalUrl)) {
-                showOverlay("HTTPS 直连失败，尝试兼容代理");
-                controller.load(proxyUrl);
-                return;
-            }
-        }
 
         if (currentSource != null) selector.markFailed(currentSource.source);
         SearchResult fallback = selector.next(sources, currentSource == null ? null : currentSource.source, episodeIndex);

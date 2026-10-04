@@ -103,3 +103,4 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 # synchronize trigger for PR #24
+# rebuild after sdkmanager JDK fix

@@ -70,8 +70,17 @@ public class LocalRepository {
     public void savePlayRecord(String source, String id, PlayRecord record) {
         Map<String, PlayRecord> records = getPlayRecords();
         record.save_time = System.currentTimeMillis();
-        records.put(key(source, id), record);
+        String recordKey = key(source, id);
+        records.remove(recordKey);
+        records.put(recordKey, record);
         prefs.setPlayRecordsJson(gson.toJson(records));
+    }
+
+    public void replacePlayRecords(Map<String, PlayRecord> records) {
+        Map<String, PlayRecord> safeRecords = records == null
+                ? new LinkedHashMap<String, PlayRecord>()
+                : records;
+        prefs.setPlayRecordsJson(gson.toJson(safeRecords));
     }
 
     public void removePlayRecord(String source, String id) {

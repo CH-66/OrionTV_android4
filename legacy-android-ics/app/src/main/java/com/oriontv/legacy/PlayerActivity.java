@@ -3,6 +3,7 @@ package com.oriontv.legacy;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.SurfaceView;
@@ -35,6 +36,7 @@ import java.net.URLEncoder;
 import java.util.ArrayList;
 
 public class PlayerActivity extends BaseActivity implements LegacyPlayerController.Listener {
+    private static final String TAG = "OrionPlayer";
     private static final String VIDEO_PROXY_BASE = "http://tvproxy.t2t.cc.cd/v1";
     private static final String VIDEO_PROXY_TOKEN = "4pCCnLfe_qROZ0cGRF1tU1CigWgHDSwNvdbhAsP4Q04";
     private static final int DEFAULT_SEEK_STEP_MS = 10000;
@@ -1751,10 +1753,16 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         app.local().savePlayRecord(currentSource.source, currentSource.id, record);
 
         if (!app.prefs().useLocalStorage()) {
-            app.api().savePlayRecord(LocalRepository.key(currentSource.source, currentSource.id),
+            final String recordKey = LocalRepository.key(currentSource.source, currentSource.id);
+            app.api().savePlayRecord(recordKey,
                     record, new ApiCallback<MutationResult>() {
-                        @Override public void onSuccess(MutationResult value) {}
-                        @Override public void onError(Throwable error) {}
+                        @Override public void onSuccess(MutationResult value) {
+                            Log.d(TAG, "Play record synced: " + recordKey);
+                        }
+
+                        @Override public void onError(Throwable error) {
+                            Log.w(TAG, "Play record sync failed: " + recordKey, error);
+                        }
                     });
         }
     }

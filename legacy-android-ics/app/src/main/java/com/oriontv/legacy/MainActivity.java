@@ -21,6 +21,9 @@ import com.oriontv.legacy.ui.PosterItem;
 import com.oriontv.legacy.ui.Ui;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -212,38 +215,98 @@ public class MainActivity extends BaseActivity {
     }
 
     private void loadRecords() {
-        if (!app.prefs().useLocalStorage()) {
-            app.api().getPlayRecords(new ApiCallback<Map<String, PlayRecord>>() {
-                @Override
-                public void onSuccess(Map<String, PlayRecord> value) {
-                    showRecords(value);
-                }
+        final Map<String, PlayRecord> localRecords = app.local().getPlayRecords();
 
-                @Override
-                public void onError(Throwable error) {
-                    handleError(error);
-                    showRecords(app.local().getPlayRecords());
-                }
-            });
+        // Local-first: returning from PlayerActivity must update the home screen immediately,
+        // even if the remote record service is slow or temporarily unavailable.
+        showRecords(localRecords);
+
+        if (app.prefs().useLocalStorage()) {
             return;
         }
-        showRecords(app.local().getPlayRecords());
+
+        app.api().getPlayRecords(new ApiCallback<Map<String, PlayRecord>>() {
+            @Override
+            public void onSuccess(Map<String, PlayRecord> remoteRecords) {
+                Map<String, PlayRecord> merged = mergePlayRecords(localRecords, remoteRecords);
+                app.local().replacePlayRecords(merged);
+                showRecords(merged);
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                android.util.Log.w("OrionMain", "Play record refresh failed; keeping local history", error);
+                // Keep the already-rendered local records. Do not replace a useful local
+                // history screen with an error just because cloud sync failed.
+            }
+        });
+    }
+
+    private Map<String, PlayRecord> mergePlayRecords(Map<String, PlayRecord> localRecords,
+                                                      Map<String, PlayRecord> remoteRecords) {
+        LinkedHashMap<String, PlayRecord> merged = new LinkedHashMap<String, PlayRecord>();
+
+        if (remoteRecords != null) {
+            for (Map.Entry<String, PlayRecord> entry : remoteRecords.entrySet()) {
+                if (entry.getKey() != null && entry.getValue() != null) {
+                    merged.put(entry.getKey(), entry.getValue());
+                }
+            }
+        }
+
+        if (localRecords != null) {
+            for (Map.Entry<String, PlayRecord> entry : localRecords.entrySet()) {
+                String key = entry.getKey();
+                PlayRecord local = entry.getValue();
+                if (key == null || local == null) continue;
+
+                PlayRecord remote = merged.get(key);
+                if (remote == null || local.save_time >= remote.save_time) {
+                    merged.put(key, local);
+                }
+            }
+        }
+
+        return merged;
     }
 
     private void showRecords(Map<String, PlayRecord> records) {
         ArrayList<PosterItem> items = new ArrayList<PosterItem>();
+        ArrayList<Map.Entry<String, PlayRecord>> entries =
+                new ArrayList<Map.Entry<String, PlayRecord>>();
+
         if (records != null) {
-            for (Map.Entry<String, PlayRecord> entry : records.entrySet()) {
-                PlayRecord record = entry.getValue();
-                PosterItem poster = new PosterItem();
-                poster.id = entry.getKey();
-                poster.title = record.title;
-                poster.poster = record.cover == null ? "" : app.api().imageProxyUrl(record.cover);
-                poster.subtitle = record.source_name + " 第" + record.index + "集";
-                poster.payload = record;
-                items.add(poster);
-            }
+            entries.addAll(records.entrySet());
         }
+
+        Collections.sort(entries, new Comparator<Map.Entry<String, PlayRecord>>() {
+            @Override
+            public int compare(Map.Entry<String, PlayRecord> left,
+                               Map.Entry<String, PlayRecord> right) {
+                PlayRecord a = left == null ? null : left.getValue();
+                PlayRecord b = right == null ? null : right.getValue();
+                long aTime = a == null ? 0L : a.save_time;
+                long bTime = b == null ? 0L : b.save_time;
+                if (aTime == bTime) return 0;
+                return aTime > bTime ? -1 : 1;
+            }
+        });
+
+        for (int i = 0; i < entries.size(); i++) {
+            Map.Entry<String, PlayRecord> entry = entries.get(i);
+            if (entry == null || entry.getValue() == null) continue;
+
+            PlayRecord record = entry.getValue();
+            PosterItem poster = new PosterItem();
+            poster.id = entry.getKey();
+            poster.title = record.title;
+            poster.poster = record.cover == null ? "" : app.api().imageProxyUrl(record.cover);
+            String sourceName = record.source_name == null ? "" : record.source_name;
+            poster.subtitle = sourceName + " 第" + record.index + "集";
+            poster.payload = record;
+            items.add(poster);
+        }
+
         adapter.setItems(items);
         status.setText(items.size() == 0 ? "暂无播放记录" : "最近播放");
     }

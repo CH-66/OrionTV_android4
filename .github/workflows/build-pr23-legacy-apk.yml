@@ -102,3 +102,4 @@ jobs:
             build-info.txt
           if-no-files-found: error
           retention-days: 7
+# synchronize trigger for PR #24

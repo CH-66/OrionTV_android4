@@ -147,6 +147,7 @@ public class HlsAdFilterTest {
         assertTrue(result.playlist.contains("v3.ts"));
         assertTrue(result.playlist.contains(
                 "v2.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:10.0,\nhttps://video.example.com/v3.ts"));
+        assertTrue(result.diagnostics.contains("splice-reset"));
         assertFalse(result.filteringBypassed);
     }
 
@@ -227,6 +228,7 @@ public class HlsAdFilterTest {
         assertFalse(result.playlist.contains("/ads/preroll.ts"));
         assertTrue(result.playlist.contains(
                 "v2.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:10.0,\nhttps://video.example.com/v3.ts"));
+        assertTrue(result.diagnostics.contains("splice-reset"));
     }
 
     private static String sameHostIslandPlaylist(int before, int middle, int after) {

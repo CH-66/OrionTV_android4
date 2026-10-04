@@ -13,6 +13,10 @@ public class PlaybackSourceSelector {
         if (source != null) failedSources.add(source);
     }
 
+    public void reset() {
+        failedSources.clear();
+    }
+
     public SearchResult next(List<SearchResult> sources, String currentSource, int episodeIndex) {
         if (sources == null) return null;
         SearchResult best = null;

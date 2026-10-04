@@ -1,7 +1,7 @@
 package com.oriontv.legacy.media;
 
-import android.os.ParcelFileDescriptor;
 import android.content.Context;
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import com.oriontv.legacy.net.LegacyHttpCompat;
@@ -10,6 +10,7 @@ import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -20,11 +21,15 @@ import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.URLDecoder;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -37,17 +42,65 @@ import okhttp3.Response;
 
 public class PlaybackProxyServer implements Closeable {
     private static final String TAG = "PlaybackProxy";
+
     private static final int MAX_MAPPED_URLS = 4096;
+    private static final int IO_BUFFER_SIZE = 64 * 1024;
+
+    private static final int PREFETCH_THREADS = 3;
+    private static final int PREFETCH_AHEAD_SEGMENTS = 4;
+    private static final int MAX_PREFETCH_QUEUED = 8;
+    private static final long PREFETCH_WAIT_MS = 350L;
+
+    private static final long SEGMENT_CACHE_LIMIT_BYTES = 64L * 1024L * 1024L;
+    private static final long MAX_CACHEABLE_SEGMENT_BYTES = 16L * 1024L * 1024L;
+
     private static final Pattern URI_ATTRIBUTE = Pattern.compile("URI=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
+
     private final OkHttpClient client = LegacyHttpCompat.newUnsafeMediaBuilder()
             .readTimeout(30, TimeUnit.SECONDS)
             .build();
+
     private final ExecutorService executor = Executors.newCachedThreadPool();
+    private final ExecutorService prefetchExecutor = Executors.newFixedThreadPool(PREFETCH_THREADS);
+
     private final Map<String, String> mappedUrls = new LinkedHashMap<String, String>();
+    private final Map<String, SegmentPosition> segmentPositions = new LinkedHashMap<String, SegmentPosition>();
+
+    private final Object cacheLock = new Object();
+    private final LinkedHashMap<String, SegmentCacheEntry> segmentCache =
+            new LinkedHashMap<String, SegmentCacheEntry>(16, 0.75f, true);
+    private long segmentCacheBytes;
+
+    private final Object prefetchLock = new Object();
+    private final Set<String> prefetching = new HashSet<String>();
+
+    private final File segmentCacheDir;
+
     private ServerSocket serverSocket;
     private volatile boolean running;
     private int port = -1;
     private int nextStreamId = 1;
+
+    public PlaybackProxyServer() {
+        this(null);
+    }
+
+    public PlaybackProxyServer(Context context) {
+        File dir = null;
+        if (context != null) {
+            Context appContext = context.getApplicationContext();
+            if (appContext == null) {
+                appContext = context;
+            }
+            dir = new File(appContext.getCacheDir(), "hls-segments");
+            resetCacheDirectory(dir);
+        }
+        segmentCacheDir = dir;
+        Log.d(TAG, "HLS cache config prefetchThreads=" + PREFETCH_THREADS
+                + " prefetchAhead=" + PREFETCH_AHEAD_SEGMENTS
+                + " cacheLimitMb=" + (SEGMENT_CACHE_LIMIT_BYTES / 1024L / 1024L)
+                + " cacheDir=" + (segmentCacheDir == null ? "disabled" : segmentCacheDir.getAbsolutePath()));
+    }
 
     public static class PlaybackPipe implements Closeable {
         public final ParcelFileDescriptor readFd;
@@ -118,7 +171,8 @@ public class PlaybackProxyServer implements Closeable {
             executor.execute(new Runnable() {
                 @Override
                 public void run() {
-                    ParcelFileDescriptor.AutoCloseOutputStream output = new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]);
+                    ParcelFileDescriptor.AutoCloseOutputStream output =
+                            new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]);
                     try {
                         String body = fetchText(originalUrl);
                         Log.d(TAG, "Pipe HLS playlist " + originalUrl + " bytes=" + body.length());
@@ -158,7 +212,8 @@ public class PlaybackProxyServer implements Closeable {
                     File file = new File(dir, "hls-" + Integer.toHexString(originalUrl.hashCode()) + ".ts");
                     output = new FileOutputStream(file, false);
                     String body = fetchText(originalUrl);
-                    Log.d(TAG, "Cache HLS playlist " + originalUrl + " bytes=" + body.length() + " file=" + file.getAbsolutePath());
+                    Log.d(TAG, "Cache HLS playlist " + originalUrl + " bytes=" + body.length()
+                            + " file=" + file.getAbsolutePath());
                     streamPlaylist(originalUrl, body, output, 0);
                     output.flush();
                     callback.onReady(file.getAbsolutePath());
@@ -219,7 +274,8 @@ public class PlaybackProxyServer implements Closeable {
                 sendError(output, 400, "Missing url");
                 return;
             }
-            Log.d(TAG, "Incoming " + method + " " + path + " -> " + upstream + " range=" + headers.get("range"));
+            Log.d(TAG, "Incoming " + method + " " + path + " -> " + upstream
+                    + " range=" + headers.get("range"));
             relay(method, upstream, headers, output);
         } catch (SocketException e) {
             Log.d(TAG, "Relay client disconnected: " + e.getMessage());
@@ -235,8 +291,27 @@ public class PlaybackProxyServer implements Closeable {
         }
     }
 
-    private void relay(String method, String upstreamUrl, Map<String, String> requestHeaders, OutputStream output) throws IOException {
+    private void relay(String method, String upstreamUrl, Map<String, String> requestHeaders,
+                       OutputStream output) throws IOException {
         boolean headRequest = "HEAD".equalsIgnoreCase(method);
+        String range = requestHeaders.get("range");
+        boolean fullSegmentRequest = !headRequest
+                && (range == null || range.length() == 0)
+                && isKnownSegment(upstreamUrl);
+
+        if (fullSegmentRequest) {
+            SegmentCacheEntry cached = getCachedSegment(upstreamUrl);
+            if (cached == null) {
+                cached = waitForPrefetch(upstreamUrl);
+            }
+            if (cached != null) {
+                Log.d(TAG, "Segment cache hit bytes=" + cached.length + " url=" + upstreamUrl);
+                scheduleReadAhead(upstreamUrl);
+                serveCachedSegment(cached, output);
+                return;
+            }
+        }
+
         Request.Builder builder = new Request.Builder().url(upstreamUrl);
         if (headRequest) {
             builder.head();
@@ -244,12 +319,15 @@ public class PlaybackProxyServer implements Closeable {
             builder.get();
         }
 
-        String range = requestHeaders.get("range");
         if (range != null && range.length() > 0) {
             builder.header("Range", range);
         }
 
         Response response = null;
+        File tempCacheFile = null;
+        FileOutputStream cacheOutput = null;
+        boolean cacheComplete = false;
+
         try {
             response = client.newCall(builder.build()).execute();
             if (!response.isSuccessful()) {
@@ -257,20 +335,26 @@ public class PlaybackProxyServer implements Closeable {
                 sendError(output, response.code(), "Upstream " + response.code());
                 return;
             }
+
             String contentType = response.header("Content-Type", "");
             boolean playlist = isPlaylist(upstreamUrl, contentType);
+
             if (playlist && headRequest) {
                 Log.d(TAG, "Playlist HEAD " + upstreamUrl);
-                sendHeaders(output, 200, statusText(200), "application/vnd.apple.mpegurl", -1, null, null, false);
+                sendHeaders(output, 200, statusText(200), "application/vnd.apple.mpegurl",
+                        -1, null, null, false);
                 output.flush();
                 return;
             }
+
             if (playlist && !headRequest) {
                 String body = response.body().string();
                 String rewritten = rewritePlaylist(upstreamUrl, body);
                 byte[] bytes = rewritten.getBytes("UTF-8");
-                Log.d(TAG, "Playlist rewrite " + upstreamUrl + " bytes=" + body.length() + " rewritten=" + bytes.length);
-                sendHeaders(output, 200, statusText(200), "application/vnd.apple.mpegurl", bytes.length, null, null, false);
+                Log.d(TAG, "Playlist rewrite " + upstreamUrl + " bytes=" + body.length()
+                        + " rewritten=" + bytes.length);
+                sendHeaders(output, 200, statusText(200), "application/vnd.apple.mpegurl",
+                        bytes.length, null, null, false);
                 output.write(bytes);
                 output.flush();
                 return;
@@ -279,6 +363,7 @@ public class PlaybackProxyServer implements Closeable {
             String contentRange = response.header("Content-Range");
             boolean partial = response.code() == 206 || contentRange != null;
             long contentLength = bodyLength(response);
+
             sendHeaders(
                     output,
                     partial ? 206 : response.code(),
@@ -289,7 +374,11 @@ public class PlaybackProxyServer implements Closeable {
                     response.header("Accept-Ranges"),
                     partial
             );
-            Log.d(TAG, "Stream relay code=" + (partial ? 206 : response.code()) + " type=" + contentType + " len=" + contentLength + " range=" + contentRange);
+
+            Log.d(TAG, "Stream relay code=" + (partial ? 206 : response.code())
+                    + " type=" + contentType + " len=" + contentLength
+                    + " range=" + contentRange);
+
             if (headRequest) {
                 output.flush();
                 return;
@@ -300,18 +389,457 @@ public class PlaybackProxyServer implements Closeable {
                 sendError(output, 502, "Missing upstream body");
                 return;
             }
+
+            boolean cacheableSegment = fullSegmentRequest
+                    && segmentCacheDir != null
+                    && (contentLength < 0 || contentLength <= MAX_CACHEABLE_SEGMENT_BYTES);
+
+            if (fullSegmentRequest) {
+                scheduleReadAhead(upstreamUrl);
+            }
+
+            if (cacheableSegment) {
+                tempCacheFile = createTempCacheFile(upstreamUrl);
+                if (tempCacheFile != null) {
+                    try {
+                        cacheOutput = new FileOutputStream(tempCacheFile, false);
+                    } catch (IOException e) {
+                        Log.w(TAG, "Cannot open segment cache file " + tempCacheFile, e);
+                        deleteQuietly(tempCacheFile);
+                        tempCacheFile = null;
+                    }
+                }
+            }
+
             InputStream upstream = response.body().byteStream();
-            byte[] buffer = new byte[8192];
+            byte[] buffer = new byte[IO_BUFFER_SIZE];
             int count;
+            long cachedBytes = 0L;
+
             while ((count = upstream.read(buffer)) != -1) {
                 output.write(buffer, 0, count);
+
+                if (cacheOutput != null) {
+                    cachedBytes += count;
+                    if (cachedBytes > MAX_CACHEABLE_SEGMENT_BYTES) {
+                        Log.d(TAG, "Segment exceeds cache size limit; continue direct relay url="
+                                + upstreamUrl);
+                        closeQuietly(cacheOutput);
+                        cacheOutput = null;
+                        deleteQuietly(tempCacheFile);
+                        tempCacheFile = null;
+                    } else {
+                        try {
+                            cacheOutput.write(buffer, 0, count);
+                        } catch (IOException cacheError) {
+                            Log.w(TAG, "Segment cache write failed; continue playback url="
+                                    + upstreamUrl, cacheError);
+                            closeQuietly(cacheOutput);
+                            cacheOutput = null;
+                            deleteQuietly(tempCacheFile);
+                            tempCacheFile = null;
+                        }
+                    }
+                }
             }
+
+            if (cacheOutput != null && tempCacheFile != null) {
+                try {
+                    cacheOutput.flush();
+                    closeQuietly(cacheOutput);
+                    cacheOutput = null;
+                    SegmentCacheEntry stored = commitCacheFile(
+                            upstreamUrl,
+                            tempCacheFile,
+                            emptyToDefault(contentType, guessContentType(upstreamUrl)),
+                            cachedBytes
+                    );
+                    cacheComplete = stored != null;
+                    if (cacheComplete) {
+                        tempCacheFile = null;
+                    }
+                } catch (IOException cacheError) {
+                    Log.w(TAG, "Segment cache finalization failed url=" + upstreamUrl, cacheError);
+                }
+            }
+
             output.flush();
         } finally {
+            closeQuietly(cacheOutput);
+            if (!cacheComplete) {
+                deleteQuietly(tempCacheFile);
+            }
             if (response != null) {
                 response.close();
             }
         }
+    }
+
+    private void registerPlaylistSegments(List<String> segments) {
+        if (segments == null || segments.size() == 0) {
+            return;
+        }
+
+        List<String> shared = new ArrayList<String>(segments);
+        synchronized (segmentPositions) {
+            for (int i = 0; i < shared.size(); i++) {
+                String url = shared.get(i);
+                segmentPositions.put(url, new SegmentPosition(shared, i));
+            }
+            while (segmentPositions.size() > MAX_MAPPED_URLS) {
+                String firstKey = segmentPositions.keySet().iterator().next();
+                segmentPositions.remove(firstKey);
+            }
+        }
+
+        Log.d(TAG, "Registered HLS media segments count=" + shared.size());
+    }
+
+    private boolean isKnownSegment(String url) {
+        if (url == null) {
+            return false;
+        }
+        synchronized (segmentPositions) {
+            return segmentPositions.containsKey(url);
+        }
+    }
+
+    private void scheduleReadAhead(String currentUrl) {
+        SegmentPosition position;
+        synchronized (segmentPositions) {
+            position = segmentPositions.get(currentUrl);
+        }
+        if (position == null || position.segments == null) {
+            return;
+        }
+
+        int end = Math.min(
+                position.segments.size(),
+                position.index + 1 + PREFETCH_AHEAD_SEGMENTS
+        );
+
+        for (int i = position.index + 1; i < end; i++) {
+            schedulePrefetch(position.segments.get(i));
+        }
+    }
+
+    private void schedulePrefetch(final String url) {
+        if (segmentCacheDir == null || url == null || url.length() == 0) {
+            return;
+        }
+        if (getCachedSegment(url) != null) {
+            return;
+        }
+
+        synchronized (prefetchLock) {
+            if (prefetching.contains(url)) {
+                return;
+            }
+            if (prefetching.size() >= MAX_PREFETCH_QUEUED) {
+                return;
+            }
+            prefetching.add(url);
+        }
+
+        try {
+            prefetchExecutor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    long startedAt = System.currentTimeMillis();
+                    try {
+                        SegmentCacheEntry entry = downloadSegmentToCache(url);
+                        if (entry != null) {
+                            Log.d(TAG, "Prefetch ready bytes=" + entry.length
+                                    + " ms=" + (System.currentTimeMillis() - startedAt)
+                                    + " url=" + url);
+                        }
+                    } catch (Exception e) {
+                        Log.d(TAG, "Prefetch skipped/failed url=" + url
+                                + " error=" + e.getMessage());
+                    } finally {
+                        synchronized (prefetchLock) {
+                            prefetching.remove(url);
+                            prefetchLock.notifyAll();
+                        }
+                    }
+                }
+            });
+        } catch (RuntimeException e) {
+            synchronized (prefetchLock) {
+                prefetching.remove(url);
+                prefetchLock.notifyAll();
+            }
+            Log.d(TAG, "Prefetch executor rejected url=" + url);
+        }
+    }
+
+    private SegmentCacheEntry waitForPrefetch(String url) {
+        SegmentCacheEntry cached = getCachedSegment(url);
+        if (cached != null) {
+            return cached;
+        }
+
+        long deadline = System.currentTimeMillis() + PREFETCH_WAIT_MS;
+        synchronized (prefetchLock) {
+            if (!prefetching.contains(url)) {
+                return null;
+            }
+            while (prefetching.contains(url)) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0L) {
+                    break;
+                }
+                try {
+                    prefetchLock.wait(remaining);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+
+        return getCachedSegment(url);
+    }
+
+    private SegmentCacheEntry downloadSegmentToCache(String url) throws IOException {
+        SegmentCacheEntry existing = getCachedSegment(url);
+        if (existing != null) {
+            return existing;
+        }
+
+        Response response = null;
+        FileOutputStream output = null;
+        File tempFile = null;
+        boolean committed = false;
+
+        try {
+            response = client.newCall(new Request.Builder().url(url).build()).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                return null;
+            }
+
+            long expectedLength = bodyLength(response);
+            if (expectedLength > MAX_CACHEABLE_SEGMENT_BYTES) {
+                return null;
+            }
+
+            tempFile = createTempCacheFile(url);
+            if (tempFile == null) {
+                return null;
+            }
+
+            output = new FileOutputStream(tempFile, false);
+            InputStream input = response.body().byteStream();
+            byte[] buffer = new byte[IO_BUFFER_SIZE];
+            long total = 0L;
+            int count;
+
+            while ((count = input.read(buffer)) != -1) {
+                total += count;
+                if (total > MAX_CACHEABLE_SEGMENT_BYTES) {
+                    return null;
+                }
+                output.write(buffer, 0, count);
+            }
+
+            output.flush();
+            closeQuietly(output);
+            output = null;
+
+            SegmentCacheEntry stored = commitCacheFile(
+                    url,
+                    tempFile,
+                    emptyToDefault(response.header("Content-Type"), guessContentType(url)),
+                    total
+            );
+            committed = stored != null;
+            if (committed) {
+                tempFile = null;
+            }
+            return stored;
+        } finally {
+            closeQuietly(output);
+            if (!committed) {
+                deleteQuietly(tempFile);
+            }
+            if (response != null) {
+                response.close();
+            }
+        }
+    }
+
+    private SegmentCacheEntry getCachedSegment(String url) {
+        if (segmentCacheDir == null || url == null) {
+            return null;
+        }
+
+        synchronized (cacheLock) {
+            SegmentCacheEntry entry = segmentCache.get(url);
+            if (entry == null) {
+                return null;
+            }
+            if (entry.file == null || !entry.file.exists()) {
+                segmentCache.remove(url);
+                segmentCacheBytes -= entry.length;
+                if (segmentCacheBytes < 0L) {
+                    segmentCacheBytes = 0L;
+                }
+                return null;
+            }
+            return entry;
+        }
+    }
+
+    private SegmentCacheEntry commitCacheFile(String url, File tempFile, String contentType,
+                                              long length) {
+        if (segmentCacheDir == null || tempFile == null || !tempFile.exists()) {
+            return null;
+        }
+        if (length <= 0L || length > MAX_CACHEABLE_SEGMENT_BYTES) {
+            return null;
+        }
+
+        synchronized (cacheLock) {
+            SegmentCacheEntry existing = segmentCache.get(url);
+            if (existing != null && existing.file != null && existing.file.exists()) {
+                deleteQuietly(tempFile);
+                return existing;
+            }
+
+            File finalFile = new File(segmentCacheDir, cacheFileName(url) + ".seg");
+            if (finalFile.exists() && !finalFile.delete()) {
+                Log.d(TAG, "Cannot replace stale cache file " + finalFile);
+                return null;
+            }
+            if (!tempFile.renameTo(finalFile)) {
+                Log.d(TAG, "Cannot promote segment cache file " + tempFile);
+                return null;
+            }
+
+            SegmentCacheEntry entry = new SegmentCacheEntry(
+                    url,
+                    finalFile,
+                    emptyToDefault(contentType, guessContentType(url)),
+                    length
+            );
+
+            SegmentCacheEntry old = segmentCache.put(url, entry);
+            if (old != null) {
+                segmentCacheBytes -= old.length;
+                if (old.file != null && !old.file.equals(finalFile)) {
+                    deleteQuietly(old.file);
+                }
+            }
+            segmentCacheBytes += length;
+
+            trimSegmentCacheLocked();
+
+            Log.d(TAG, "Segment cache store bytes=" + length
+                    + " totalMb=" + (segmentCacheBytes / 1024L / 1024L)
+                    + " url=" + url);
+            return entry;
+        }
+    }
+
+    private void trimSegmentCacheLocked() {
+        Iterator<Map.Entry<String, SegmentCacheEntry>> iterator =
+                segmentCache.entrySet().iterator();
+
+        while (segmentCacheBytes > SEGMENT_CACHE_LIMIT_BYTES && iterator.hasNext()) {
+            Map.Entry<String, SegmentCacheEntry> eldest = iterator.next();
+            SegmentCacheEntry entry = eldest.getValue();
+            iterator.remove();
+            segmentCacheBytes -= entry.length;
+            deleteQuietly(entry.file);
+            Log.d(TAG, "Segment cache evict bytes=" + entry.length + " url=" + entry.url);
+        }
+
+        if (segmentCacheBytes < 0L) {
+            segmentCacheBytes = 0L;
+        }
+    }
+
+    private void serveCachedSegment(SegmentCacheEntry entry, OutputStream output) throws IOException {
+        sendHeaders(
+                output,
+                200,
+                statusText(200),
+                emptyToDefault(entry.contentType, "application/octet-stream"),
+                entry.length,
+                null,
+                "bytes",
+                false
+        );
+
+        FileInputStream input = null;
+        try {
+            input = new FileInputStream(entry.file);
+            byte[] buffer = new byte[IO_BUFFER_SIZE];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+            }
+            output.flush();
+        } finally {
+            if (input != null) {
+                try {
+                    input.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
+    }
+
+    private File createTempCacheFile(String url) {
+        if (segmentCacheDir == null) {
+            return null;
+        }
+        if (!segmentCacheDir.exists() && !segmentCacheDir.mkdirs()) {
+            return null;
+        }
+        return new File(
+                segmentCacheDir,
+                cacheFileName(url) + "-" + Thread.currentThread().getId() + ".tmp"
+        );
+    }
+
+    private String cacheFileName(String url) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-1");
+            byte[] bytes = digest.digest(url.getBytes("UTF-8"));
+            char[] hex = new char[bytes.length * 2];
+            char[] alphabet = "0123456789abcdef".toCharArray();
+            for (int i = 0; i < bytes.length; i++) {
+                int value = bytes[i] & 0xff;
+                hex[i * 2] = alphabet[value >>> 4];
+                hex[i * 2 + 1] = alphabet[value & 0x0f];
+            }
+            return new String(hex);
+        } catch (Exception ignored) {
+            return Integer.toHexString(url.hashCode());
+        }
+    }
+
+    private String guessContentType(String url) {
+        String lower = url == null ? "" : url.toLowerCase(Locale.US);
+        int query = lower.indexOf('?');
+        if (query >= 0) {
+            lower = lower.substring(0, query);
+        }
+
+        if (lower.endsWith(".ts") || lower.contains(".ts/")) {
+            return "video/mp2t";
+        }
+        if (lower.endsWith(".m4s") || lower.endsWith(".mp4")) {
+            return "video/mp4";
+        }
+        if (lower.endsWith(".aac")) {
+            return "audio/aac";
+        }
+        if (lower.endsWith(".mp3")) {
+            return "audio/mpeg";
+        }
+        return "application/octet-stream";
     }
 
     private long bodyLength(Response response) {
@@ -349,7 +877,9 @@ public class PlaybackProxyServer implements Closeable {
     private boolean isPlaylist(String url, String contentType) {
         String lowerUrl = url == null ? "" : url.toLowerCase(Locale.US);
         String lowerType = contentType == null ? "" : contentType.toLowerCase(Locale.US);
-        return lowerUrl.contains(".m3u8") || lowerType.contains("mpegurl") || lowerType.contains("vnd.apple.mpegurl");
+        return lowerUrl.contains(".m3u8")
+                || lowerType.contains("mpegurl")
+                || lowerType.contains("vnd.apple.mpegurl");
     }
 
     private boolean looksLikePlaylist(String url) {
@@ -371,7 +901,8 @@ public class PlaybackProxyServer implements Closeable {
 
     private synchronized String localProxyUrl(String upstreamUrl) {
         String id = rememberUrl(upstreamUrl);
-        return "http://127.0.0.1:" + port + "/stream/" + id + playbackExtension(upstreamUrl.toLowerCase(Locale.US));
+        return "http://127.0.0.1:" + port + "/stream/" + id
+                + playbackExtension(upstreamUrl.toLowerCase(Locale.US));
     }
 
     private String playbackExtension(String lowerUrl) {
@@ -403,22 +934,46 @@ public class PlaybackProxyServer implements Closeable {
         if (body == null) {
             return "";
         }
-        String[] lines = body.replace("\r", "").split("\n", -1);
+
+        String normalized = body.replace("\r", "");
+        String upperBody = normalized.toUpperCase(Locale.US);
+        boolean mediaPlaylist = upperBody.contains("#EXTINF");
+        boolean byteRangePlaylist = upperBody.contains("#EXT-X-BYTERANGE");
+
+        String[] lines = normalized.split("\n", -1);
         StringBuilder rewritten = new StringBuilder(body.length() + 256);
+        List<String> mediaSegments = mediaPlaylist && !byteRangePlaylist
+                ? new ArrayList<String>()
+                : null;
+
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
             String trimmed = line == null ? "" : line.trim();
+
             if (trimmed.length() == 0) {
                 rewritten.append(line == null ? "" : line);
             } else if (trimmed.startsWith("#")) {
                 rewritten.append(rewriteUriAttributes(playlistUrl, line));
             } else {
-                rewritten.append(localProxyUrl(resolve(playlistUrl, trimmed)));
+                String resolved = resolve(playlistUrl, trimmed);
+                if (mediaSegments != null) {
+                    mediaSegments.add(resolved);
+                }
+                rewritten.append(localProxyUrl(resolved));
             }
+
             if (i < lines.length - 1) {
                 rewritten.append('\n');
             }
         }
+
+        if (mediaSegments != null && mediaSegments.size() > 0) {
+            registerPlaylistSegments(mediaSegments);
+        } else if (mediaPlaylist && byteRangePlaylist) {
+            Log.d(TAG, "Byte-range HLS detected; segment prefetch cache disabled for "
+                    + playlistUrl);
+        }
+
         return rewritten.toString();
     }
 
@@ -434,7 +989,8 @@ public class PlaybackProxyServer implements Closeable {
         return buffer.toString();
     }
 
-    private void streamPlaylist(String playlistUrl, String body, OutputStream output, int depth) throws IOException {
+    private void streamPlaylist(String playlistUrl, String body, OutputStream output, int depth)
+            throws IOException {
         if (depth > 3) {
             throw new IOException("Playlist nesting too deep");
         }
@@ -445,7 +1001,9 @@ public class PlaybackProxyServer implements Closeable {
             streamPlaylist(parts.masterPlaylistUrl, nestedBody, output, depth + 1);
             return;
         }
-        Log.d(TAG, "Stream TS segments count=" + parts.segments.size() + " playlist=" + playlistUrl);
+
+        Log.d(TAG, "Stream TS segments count=" + parts.segments.size()
+                + " playlist=" + playlistUrl);
         for (int i = 0; i < parts.segments.size(); i++) {
             String segment = parts.segments.get(i);
             Log.d(TAG, "Segment " + (i + 1) + "/" + parts.segments.size() + " " + segment);
@@ -457,6 +1015,7 @@ public class PlaybackProxyServer implements Closeable {
         PlaylistParts parts = new PlaylistParts();
         String[] lines = body.replace("\r", "").split("\n");
         boolean nextIsVariant = false;
+
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i] == null ? "" : lines[i].trim();
             if (line.length() == 0) {
@@ -469,6 +1028,7 @@ public class PlaybackProxyServer implements Closeable {
             if (line.startsWith("#")) {
                 continue;
             }
+
             String resolved = resolve(playlistUrl, line);
             if (nextIsVariant && parts.masterPlaylistUrl == null) {
                 parts.masterPlaylistUrl = resolved;
@@ -490,7 +1050,9 @@ public class PlaybackProxyServer implements Closeable {
             }
             return response.body().string();
         } finally {
-            if (response != null) response.close();
+            if (response != null) {
+                response.close();
+            }
         }
     }
 
@@ -502,14 +1064,16 @@ public class PlaybackProxyServer implements Closeable {
                 throw new IOException("Segment fetch failed " + response.code() + " " + url);
             }
             InputStream input = response.body().byteStream();
-            byte[] buffer = new byte[8192];
+            byte[] buffer = new byte[IO_BUFFER_SIZE];
             int count;
             while ((count = input.read(buffer)) != -1) {
                 output.write(buffer, 0, count);
             }
             output.flush();
         } finally {
-            if (response != null) response.close();
+            if (response != null) {
+                response.close();
+            }
         }
     }
 
@@ -545,7 +1109,9 @@ public class PlaybackProxyServer implements Closeable {
             if (rawPath == null || rawPath.length() == 0) {
                 rawPath = "/";
             }
-            return rawQuery == null || rawQuery.length() == 0 ? rawPath : rawPath + "?" + rawQuery;
+            return rawQuery == null || rawQuery.length() == 0
+                    ? rawPath
+                    : rawPath + "?" + rawQuery;
         } catch (RuntimeException ignored) {
             return path;
         }
@@ -555,11 +1121,13 @@ public class PlaybackProxyServer implements Closeable {
         if (path == null) {
             return null;
         }
+
         int queryIndex = path.indexOf('?');
         String cleanPath = queryIndex >= 0 ? path.substring(0, queryIndex) : path;
         if (!cleanPath.startsWith("/stream/")) {
             return null;
         }
+
         String id = cleanPath.substring("/stream/".length());
         int dot = id.indexOf('.');
         if (dot >= 0) {
@@ -569,6 +1137,7 @@ public class PlaybackProxyServer implements Closeable {
         if (slash >= 0) {
             id = id.substring(0, slash);
         }
+
         synchronized (this) {
             return mappedUrls.get(id);
         }
@@ -579,6 +1148,7 @@ public class PlaybackProxyServer implements Closeable {
         if (queryIndex < 0) {
             return null;
         }
+
         String query = path.substring(queryIndex + 1);
         String[] pairs = query.split("&");
         for (int i = 0; i < pairs.length; i++) {
@@ -614,7 +1184,8 @@ public class PlaybackProxyServer implements Closeable {
 
     private void sendError(OutputStream output, int code, String text) throws IOException {
         byte[] body = text.getBytes("UTF-8");
-        sendHeaders(output, code, statusText(code), "text/plain; charset=utf-8", body.length, null, "bytes", false);
+        sendHeaders(output, code, statusText(code), "text/plain; charset=utf-8",
+                body.length, null, "bytes", false);
         output.write(body);
         output.flush();
     }
@@ -636,7 +1207,9 @@ public class PlaybackProxyServer implements Closeable {
         if (contentLength >= 0) {
             builder.append("Content-Length: ").append(contentLength).append("\r\n");
         }
-        builder.append("Accept-Ranges: ").append(emptyToDefault(acceptRanges, "bytes")).append("\r\n");
+        builder.append("Accept-Ranges: ")
+                .append(emptyToDefault(acceptRanges, "bytes"))
+                .append("\r\n");
         if (contentRange != null && contentRange.length() > 0) {
             builder.append("Content-Range: ").append(contentRange).append("\r\n");
         } else if (partial) {
@@ -681,9 +1254,82 @@ public class PlaybackProxyServer implements Closeable {
         }
     }
 
+    private void resetCacheDirectory(File dir) {
+        if (dir == null) {
+            return;
+        }
+        if (!dir.exists() && !dir.mkdirs()) {
+            Log.w(TAG, "Cannot create HLS cache directory " + dir);
+            return;
+        }
+        File[] files = dir.listFiles();
+        if (files == null) {
+            return;
+        }
+        for (int i = 0; i < files.length; i++) {
+            deleteQuietly(files[i]);
+        }
+    }
+
+    private void clearSegmentCache() {
+        synchronized (cacheLock) {
+            Iterator<Map.Entry<String, SegmentCacheEntry>> iterator =
+                    segmentCache.entrySet().iterator();
+            while (iterator.hasNext()) {
+                SegmentCacheEntry entry = iterator.next().getValue();
+                deleteQuietly(entry.file);
+                iterator.remove();
+            }
+            segmentCacheBytes = 0L;
+        }
+    }
+
+    private void closeQuietly(FileOutputStream output) {
+        if (output == null) {
+            return;
+        }
+        try {
+            output.close();
+        } catch (IOException ignored) {
+        }
+    }
+
+    private void deleteQuietly(File file) {
+        if (file != null && file.exists()) {
+            try {
+                file.delete();
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
     private static class PlaylistParts {
         String masterPlaylistUrl;
         List<String> segments = new ArrayList<String>();
+    }
+
+    private static class SegmentPosition {
+        final List<String> segments;
+        final int index;
+
+        SegmentPosition(List<String> segments, int index) {
+            this.segments = segments;
+            this.index = index;
+        }
+    }
+
+    private static class SegmentCacheEntry {
+        final String url;
+        final File file;
+        final String contentType;
+        final long length;
+
+        SegmentCacheEntry(String url, File file, String contentType, long length) {
+            this.url = url;
+            this.file = file;
+            this.contentType = contentType;
+            this.length = length;
+        }
     }
 
     @Override
@@ -693,6 +1339,20 @@ public class PlaybackProxyServer implements Closeable {
             serverSocket.close();
             serverSocket = null;
         }
+
         executor.shutdownNow();
+        prefetchExecutor.shutdownNow();
+
+        synchronized (prefetchLock) {
+            prefetching.clear();
+            prefetchLock.notifyAll();
+        }
+
+        clearSegmentCache();
+
+        synchronized (segmentPositions) {
+            segmentPositions.clear();
+        }
+        mappedUrls.clear();
     }
 }

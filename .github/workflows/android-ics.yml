@@ -98,6 +98,9 @@ jobs:
             gradle -p legacy-android-ics :app:assembleDebug
           fi
 
+      - name: Verify preparation retry rules
+        run: gradle -p legacy-android-ics :app:testDebugUnitTest
+
       - name: Rename APK
         run: |
           mkdir -p artifacts

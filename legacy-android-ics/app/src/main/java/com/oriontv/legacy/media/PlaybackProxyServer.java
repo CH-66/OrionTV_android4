@@ -4,6 +4,7 @@ import android.content.Context;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
+import com.oriontv.legacy.data.PreferencesStore;
 import com.oriontv.legacy.net.LegacyHttpCompat;
 
 import java.io.BufferedInputStream;
@@ -75,6 +76,17 @@ public class PlaybackProxyServer implements Closeable {
     private final Set<String> prefetching = new HashSet<String>();
 
     private final File segmentCacheDir;
+    private final PreferencesStore preferencesStore;
+
+    private final Object adStatsLock = new Object();
+    private final Set<String> reportedAdSignatures = new HashSet<String>();
+    private volatile String activeSourceKey;
+    private volatile String activeSourceName;
+    private volatile int blockedAdSegments;
+    private volatile long blockedAdDurationMs;
+    private volatile int suppressedInterstitials;
+    private volatile int detectedAdMarkers;
+    private volatile boolean adFilteringBypassed;
 
     private ServerSocket serverSocket;
     private volatile boolean running;
@@ -83,10 +95,15 @@ public class PlaybackProxyServer implements Closeable {
     private volatile String activeSegmentUrl;
 
     public PlaybackProxyServer() {
-        this(null);
+        this(null, null);
     }
 
     public PlaybackProxyServer(Context context) {
+        this(context, null);
+    }
+
+    public PlaybackProxyServer(Context context, PreferencesStore preferencesStore) {
+        this.preferencesStore = preferencesStore;
         File dir = null;
         if (context != null) {
             Context appContext = context.getApplicationContext();
@@ -137,12 +154,20 @@ public class PlaybackProxyServer implements Closeable {
         public final int lookAheadTarget;
         public final int lookAheadPercent;
         public final int bufferedUntilPermille;
+        public final int blockedAdSegments;
+        public final long blockedAdDurationMs;
+        public final int suppressedInterstitials;
+        public final int detectedAdMarkers;
+        public final boolean adFilteringBypassed;
 
         CacheStats(boolean enabled, long cachedBytes, long cacheLimitBytes,
                    int cachedSegments, int prefetchingSegments,
                    int currentSegmentIndex, int totalSegments,
                    int lookAheadReady, int lookAheadTarget,
-                   int lookAheadPercent, int bufferedUntilPermille) {
+                   int lookAheadPercent, int bufferedUntilPermille,
+                   int blockedAdSegments, long blockedAdDurationMs,
+                   int suppressedInterstitials, int detectedAdMarkers,
+                   boolean adFilteringBypassed) {
             this.enabled = enabled;
             this.cachedBytes = cachedBytes;
             this.cacheLimitBytes = cacheLimitBytes;
@@ -154,11 +179,29 @@ public class PlaybackProxyServer implements Closeable {
             this.lookAheadTarget = lookAheadTarget;
             this.lookAheadPercent = lookAheadPercent;
             this.bufferedUntilPermille = bufferedUntilPermille;
+            this.blockedAdSegments = blockedAdSegments;
+            this.blockedAdDurationMs = blockedAdDurationMs;
+            this.suppressedInterstitials = suppressedInterstitials;
+            this.detectedAdMarkers = detectedAdMarkers;
+            this.adFilteringBypassed = adFilteringBypassed;
         }
+    }
+
+    public void setPlaybackContext(String sourceKey, String sourceName) {
+        activeSourceKey = sourceKey;
+        activeSourceName = sourceName;
     }
 
     public void resetPlaybackStats() {
         activeSegmentUrl = null;
+        synchronized (adStatsLock) {
+            blockedAdSegments = 0;
+            blockedAdDurationMs = 0L;
+            suppressedInterstitials = 0;
+            detectedAdMarkers = 0;
+            adFilteringBypassed = false;
+            reportedAdSignatures.clear();
+        }
     }
 
     public CacheStats cacheStats() {
@@ -194,7 +237,12 @@ public class PlaybackProxyServer implements Closeable {
                     0,
                     0,
                     0,
-                    0
+                    0,
+                    blockedAdSegments,
+                    blockedAdDurationMs,
+                    suppressedInterstitials,
+                    detectedAdMarkers,
+                    adFilteringBypassed
             );
         }
 
@@ -235,7 +283,12 @@ public class PlaybackProxyServer implements Closeable {
                 ready,
                 target,
                 percent,
-                bufferedPermille
+                bufferedPermille,
+                blockedAdSegments,
+                blockedAdDurationMs,
+                suppressedInterstitials,
+                detectedAdMarkers,
+                adFilteringBypassed
         );
     }
 
@@ -1066,6 +1119,12 @@ public class PlaybackProxyServer implements Closeable {
             return "";
         }
 
+        HlsAdFilter.Result adResult = HlsAdFilter.filter(playlistUrl, body);
+        if (adResult.hasAdEvidence()) {
+            noteAdFiltering(playlistUrl, adResult);
+        }
+        body = adResult.playlist;
+
         String normalized = body.replace("\r", "");
         String upperBody = normalized.toUpperCase(Locale.US);
         boolean mediaPlaylist = upperBody.contains("#EXTINF");
@@ -1106,6 +1165,54 @@ public class PlaybackProxyServer implements Closeable {
         }
 
         return rewritten.toString();
+    }
+
+    private void noteAdFiltering(String playlistUrl, HlsAdFilter.Result result) {
+        if (result == null || !result.hasAdEvidence()) return;
+
+        String signature = (activeSourceKey == null ? "" : activeSourceKey)
+                + "|" + playlistUrl + "|" + result.signature
+                + "|" + result.removedSegments
+                + "|" + result.suppressedInterstitials
+                + "|" + result.byteRangeBypass;
+
+        synchronized (adStatsLock) {
+            if (reportedAdSignatures.contains(signature)) {
+                return;
+            }
+            reportedAdSignatures.add(signature);
+
+            blockedAdSegments += result.removedSegments;
+            blockedAdDurationMs += result.removedDurationMs;
+            suppressedInterstitials += result.suppressedInterstitials;
+            detectedAdMarkers += result.detectedAdMarkers;
+            if (result.byteRangeBypass && result.detectedAdMarkers > 0) {
+                adFilteringBypassed = true;
+            }
+
+            while (reportedAdSignatures.size() > 128) {
+                Iterator<String> iterator = reportedAdSignatures.iterator();
+                if (!iterator.hasNext()) break;
+                iterator.next();
+                iterator.remove();
+            }
+        }
+
+        int evidence = result.removedSegments + result.suppressedInterstitials;
+        if (result.byteRangeBypass && result.detectedAdMarkers > 0) {
+            evidence++;
+        }
+        if (preferencesStore != null && activeSourceKey != null && evidence > 0) {
+            preferencesStore.recordSourceAdDetection(activeSourceKey, evidence);
+        }
+
+        Log.i(TAG, "HLS ad filter source=" + activeSourceName
+                + " removedSegments=" + result.removedSegments
+                + " removedMs=" + result.removedDurationMs
+                + " suppressedInterstitials=" + result.suppressedInterstitials
+                + " markers=" + result.detectedAdMarkers
+                + " byteRangeBypass=" + result.byteRangeBypass
+                + " playlist=" + playlistUrl);
     }
 
     private String rewriteUriAttributes(String playlistUrl, String line) {

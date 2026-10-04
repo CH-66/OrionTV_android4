@@ -16,17 +16,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17 for Android SDK tools
+      - name: Set up JDK 17 for SDK manager
         uses: actions/setup-java@v4
         with:
           distribution: zulu
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install legacy Android SDK packages
         run: |
+          yes | sdkmanager --licenses >/dev/null || true
           yes | sdkmanager "platform-tools" "platforms;android-25" "build-tools;26.0.2"
 
       - name: Set up JDK 8 for legacy Gradle build

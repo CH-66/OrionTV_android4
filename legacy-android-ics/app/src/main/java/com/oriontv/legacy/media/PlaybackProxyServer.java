@@ -536,9 +536,7 @@ public class PlaybackProxyServer implements Closeable {
                 && isKnownSegment(upstreamUrl);
 
         if (fullSegmentRequest) {
-            if (sessionId <= 0L || isPlaybackSessionActive(sessionId)) {
-                activeSegmentUrl = upstreamUrl;
-            }
+            markActiveSegment(sessionId, upstreamUrl);
             SegmentCacheEntry cached = getCachedSegment(upstreamUrl);
             if (cached == null) {
                 cached = waitForPrefetch(upstreamUrl, sessionId);
@@ -727,6 +725,9 @@ public class PlaybackProxyServer implements Closeable {
 
         List<String> shared = new ArrayList<String>(segments);
         synchronized (segmentPositions) {
+            if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+                return;
+            }
             for (int i = 0; i < shared.size(); i++) {
                 String url = shared.get(i);
                 segmentPositions.put(url, new SegmentPosition(shared, i));
@@ -738,6 +739,14 @@ public class PlaybackProxyServer implements Closeable {
         }
 
         Log.d(TAG, "Registered HLS media segments count=" + shared.size());
+    }
+
+    private synchronized boolean markActiveSegment(long sessionId, String url) {
+        if (sessionId > 0L && activePlaybackSessionId != sessionId) {
+            return false;
+        }
+        activeSegmentUrl = url;
+        return true;
     }
 
     private boolean isKnownSegment(String url) {
@@ -755,6 +764,9 @@ public class PlaybackProxyServer implements Closeable {
         }
         SegmentPosition position;
         synchronized (segmentPositions) {
+            if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+                return;
+            }
             position = segmentPositions.get(currentUrl);
         }
         if (position == null || position.segments == null) {
@@ -782,14 +794,18 @@ public class PlaybackProxyServer implements Closeable {
             return;
         }
 
+        final String prefetchKey = prefetchKey(sessionId, url);
         synchronized (prefetchLock) {
-            if (prefetching.contains(url)) {
+            if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+                return;
+            }
+            if (prefetching.contains(prefetchKey)) {
                 return;
             }
             if (prefetching.size() >= MAX_PREFETCH_QUEUED) {
                 return;
             }
-            prefetching.add(url);
+            prefetching.add(prefetchKey);
         }
 
         try {
@@ -815,7 +831,7 @@ public class PlaybackProxyServer implements Closeable {
                                 + " error=" + e.getMessage());
                     } finally {
                         synchronized (prefetchLock) {
-                            prefetching.remove(url);
+                            prefetching.remove(prefetchKey);
                             prefetchLock.notifyAll();
                         }
                     }
@@ -823,17 +839,22 @@ public class PlaybackProxyServer implements Closeable {
             });
         } catch (RuntimeException e) {
             synchronized (prefetchLock) {
-                prefetching.remove(url);
+                prefetching.remove(prefetchKey);
                 prefetchLock.notifyAll();
             }
             Log.d(TAG, "Prefetch executor rejected url=" + url);
         }
     }
 
+    private String prefetchKey(long sessionId, String url) {
+        return sessionId + "|" + url;
+    }
+
     private SegmentCacheEntry waitForPrefetch(String url, long sessionId) {
         if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
             return null;
         }
+        final String prefetchKey = prefetchKey(sessionId, url);
         SegmentCacheEntry cached = getCachedSegment(url);
         if (cached != null) {
             return cached;
@@ -841,10 +862,10 @@ public class PlaybackProxyServer implements Closeable {
 
         long deadline = System.currentTimeMillis() + PREFETCH_WAIT_MS;
         synchronized (prefetchLock) {
-            if (!prefetching.contains(url)) {
+            if (!prefetching.contains(prefetchKey)) {
                 return null;
             }
-            while (prefetching.contains(url)) {
+            while (prefetching.contains(prefetchKey)) {
                 long remaining = deadline - System.currentTimeMillis();
                 if (remaining <= 0L) {
                     break;
@@ -1167,6 +1188,9 @@ public class PlaybackProxyServer implements Closeable {
     }
 
     private synchronized String localProxyUrl(String upstreamUrl, long sessionId) {
+        if (sessionId > 0L && activePlaybackSessionId != sessionId) {
+            return upstreamUrl;
+        }
         String id = rememberUrl(upstreamUrl, sessionId);
         return "http://127.0.0.1:" + port + "/stream/" + id
                 + playbackExtension(upstreamUrl.toLowerCase(Locale.US));
@@ -1265,13 +1289,24 @@ public class PlaybackProxyServer implements Closeable {
         if (result == null || !result.hasAdEvidence()) return;
         if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) return;
 
-        String signature = (activeSourceKey == null ? "" : activeSourceKey)
-                + "|" + playlistUrl + "|" + result.signature
-                + "|" + result.removedSegments
-                + "|" + result.suppressedInterstitials
-                + "|" + result.byteRangeBypass;
-
+        String sourceKey;
+        String sourceName;
         synchronized (adStatsLock) {
+            // Recheck inside the same critical section used by resetPlaybackStats().
+            // This closes the race where a new session resets stats while an old playlist
+            // has already passed the first stale-session check.
+            if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
+                return;
+            }
+
+            sourceKey = activeSourceKey;
+            sourceName = activeSourceName;
+            String signature = (sourceKey == null ? "" : sourceKey)
+                    + "|" + playlistUrl + "|" + result.signature
+                    + "|" + result.removedSegments
+                    + "|" + result.suppressedInterstitials
+                    + "|" + result.byteRangeBypass;
+
             if (reportedAdSignatures.contains(signature)) {
                 return;
             }
@@ -1300,11 +1335,11 @@ public class PlaybackProxyServer implements Closeable {
         if (sessionId > 0L && !isPlaybackSessionActive(sessionId)) {
             return;
         }
-        if (preferencesStore != null && activeSourceKey != null && evidence > 0) {
-            preferencesStore.recordSourceAdDetection(activeSourceKey, evidence);
+        if (preferencesStore != null && sourceKey != null && evidence > 0) {
+            preferencesStore.recordSourceAdDetection(sourceKey, evidence);
         }
 
-        Log.i(TAG, "HLS ad filter source=" + activeSourceName
+        Log.i(TAG, "HLS ad filter source=" + sourceName
                 + " removedSegments=" + result.removedSegments
                 + " removedMs=" + result.removedDurationMs
                 + " suppressedInterstitials=" + result.suppressedInterstitials

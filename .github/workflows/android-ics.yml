@@ -19,7 +19,6 @@ on:
   push:
     branches:
       - build/android-ics-20261004
-      - fix/detail-page-tv-20261004
 
 permissions:
   contents: write
@@ -83,19 +82,12 @@ jobs:
           path: ~/.android/debug.keystore
           key: oriontv-legacy-debug-keystore-v1
 
-      - name: Prepare compile-check signing key
+      - name: Verify stable Android signing key
         run: |
           if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            mkdir -p "$HOME/.android"
-            keytool -genkeypair -v \
-              -keystore "$HOME/.android/debug.keystore" \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Compile Check,O=OrionTV,C=US"
+            echo "Stable OrionTV signing key cache is missing."
+            echo "Refusing to generate a new key because that would break APK upgrade compatibility."
+            exit 1
           fi
 
       - name: Build legacy APK

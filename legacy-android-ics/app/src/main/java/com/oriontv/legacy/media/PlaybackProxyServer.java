@@ -305,10 +305,13 @@ public class PlaybackProxyServer implements Closeable {
                 cached = waitForPrefetch(upstreamUrl);
             }
             if (cached != null) {
-                Log.d(TAG, "Segment cache hit bytes=" + cached.length + " url=" + upstreamUrl);
-                scheduleReadAhead(upstreamUrl);
-                serveCachedSegment(cached, output);
-                return;
+                if (serveCachedSegment(cached, output)) {
+                    Log.d(TAG, "Segment cache hit bytes=" + cached.length + " url=" + upstreamUrl);
+                    scheduleReadAhead(upstreamUrl);
+                    return;
+                }
+                Log.d(TAG, "Segment cache entry disappeared before open; fallback upstream url="
+                        + upstreamUrl);
             }
         }
 
@@ -759,33 +762,37 @@ public class PlaybackProxyServer implements Closeable {
         }
     }
 
-    private void serveCachedSegment(SegmentCacheEntry entry, OutputStream output) throws IOException {
-        sendHeaders(
-                output,
-                200,
-                statusText(200),
-                emptyToDefault(entry.contentType, "application/octet-stream"),
-                entry.length,
-                null,
-                "bytes",
-                false
-        );
-
-        FileInputStream input = null;
+    private boolean serveCachedSegment(SegmentCacheEntry entry, OutputStream output) throws IOException {
+        FileInputStream input;
         try {
             input = new FileInputStream(entry.file);
+        } catch (IOException missingCacheFile) {
+            return false;
+        }
+
+        try {
+            sendHeaders(
+                    output,
+                    200,
+                    statusText(200),
+                    emptyToDefault(entry.contentType, "application/octet-stream"),
+                    entry.length,
+                    null,
+                    "bytes",
+                    false
+            );
+
             byte[] buffer = new byte[IO_BUFFER_SIZE];
             int count;
             while ((count = input.read(buffer)) != -1) {
                 output.write(buffer, 0, count);
             }
             output.flush();
+            return true;
         } finally {
-            if (input != null) {
-                try {
-                    input.close();
-                } catch (IOException ignored) {
-                }
+            try {
+                input.close();
+            } catch (IOException ignored) {
             }
         }
     }

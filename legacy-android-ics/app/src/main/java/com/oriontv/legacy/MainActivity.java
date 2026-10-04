@@ -32,6 +32,7 @@ public class MainActivity extends BaseActivity {
     private TextView status;
     private Category selected;
     private int pageStart;
+    private final ArrayList<Button> categoryButtons = new ArrayList<Button>();
 
     private final Category[] categories = new Category[] {
             new Category("最近播放", "record", ""),
@@ -63,50 +64,68 @@ public class MainActivity extends BaseActivity {
 
     private void buildUi() {
         LinearLayout root = Ui.vertical(this);
-        LinearLayout nav = Ui.row(this);
-        Button search = Ui.button(this, "搜索");
-        Button live = Ui.button(this, "直播");
-        Button favorites = Ui.button(this, "收藏");
-        Button settings = Ui.button(this, "设置");
-        nav.addView(search, new LinearLayout.LayoutParams(Ui.dp(this, 90), Ui.dp(this, 46)));
-        nav.addView(Ui.spacer(this, 10, 1));
-        nav.addView(live, new LinearLayout.LayoutParams(Ui.dp(this, 90), Ui.dp(this, 46)));
-        nav.addView(Ui.spacer(this, 10, 1));
-        nav.addView(favorites, new LinearLayout.LayoutParams(Ui.dp(this, 90), Ui.dp(this, 46)));
-        nav.addView(Ui.spacer(this, 10, 1));
-        nav.addView(settings, new LinearLayout.LayoutParams(Ui.dp(this, 90), Ui.dp(this, 46)));
 
-        root.addView(nav);
-        root.addView(Ui.spacer(this, 1, 12));
+        LinearLayout header = Ui.row(this);
+        TextView brand = Ui.brand(this, "OrionTV");
+        header.addView(brand, new LinearLayout.LayoutParams(0, Ui.dp(this, 42), 1));
+
+        LinearLayout nav = Ui.row(this);
+        Button search = Ui.navButton(this, "搜索");
+        Button live = Ui.navButton(this, "直播");
+        Button favorites = Ui.navButton(this, "收藏");
+        Button settings = Ui.navButton(this, "设置");
+        nav.addView(search, new LinearLayout.LayoutParams(Ui.dp(this, 76), Ui.dp(this, 38)));
+        nav.addView(Ui.spacer(this, 8, 1));
+        nav.addView(live, new LinearLayout.LayoutParams(Ui.dp(this, 76), Ui.dp(this, 38)));
+        nav.addView(Ui.spacer(this, 8, 1));
+        nav.addView(favorites, new LinearLayout.LayoutParams(Ui.dp(this, 76), Ui.dp(this, 38)));
+        nav.addView(Ui.spacer(this, 8, 1));
+        nav.addView(settings, new LinearLayout.LayoutParams(Ui.dp(this, 76), Ui.dp(this, 38)));
+        header.addView(nav, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, Ui.dp(this, 42)));
+
+        root.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 44)));
+        root.addView(Ui.spacer(this, 1, 10));
 
         HorizontalScrollView categoryScroll = new HorizontalScrollView(this);
+        categoryScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout categoryRow = Ui.row(this);
+        categoryButtons.clear();
         for (int i = 0; i < categories.length; i++) {
-            final Category category = categories[i];
-            Button button = Ui.button(this, category.title);
+            final int categoryIndex = i;
+            Button button = Ui.tabButton(this, categories[i].title);
+            categoryButtons.add(button);
             button.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    selected = category;
+                    selected = categories[categoryIndex];
                     pageStart = 0;
+                    updateCategoryTabs();
                     loadSelected();
                 }
             });
-            categoryRow.addView(button, new LinearLayout.LayoutParams(Ui.dp(this, 130), Ui.dp(this, 44)));
-            categoryRow.addView(Ui.spacer(this, 8, 1));
+            categoryRow.addView(button, new LinearLayout.LayoutParams(
+                    Ui.dp(this, 122), Ui.dp(this, 38)));
+            categoryRow.addView(Ui.spacer(this, 7, 1));
         }
         categoryScroll.addView(categoryRow);
-        root.addView(categoryScroll);
+        root.addView(categoryScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 42)));
+        updateCategoryTabs();
 
-        status = Ui.muted(this, "加载中", 16);
+        status = Ui.sectionTitle(this, "最近播放");
         root.addView(status);
 
         final GridView grid = new GridView(this);
-        grid.setNumColumns(GridView.AUTO_FIT);
-        grid.setColumnWidth(Ui.dp(this, 160));
-        grid.setHorizontalSpacing(Ui.dp(this, 12));
-        grid.setVerticalSpacing(Ui.dp(this, 12));
+        grid.setNumColumns(6);
+        grid.setColumnWidth(Ui.dp(this, 164));
+        grid.setHorizontalSpacing(Ui.dp(this, 14));
+        grid.setVerticalSpacing(Ui.dp(this, 14));
         grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
+        grid.setSelector(android.R.color.transparent);
+        grid.setCacheColorHint(android.graphics.Color.TRANSPARENT);
+        grid.setVerticalScrollBarEnabled(false);
         grid.setFocusable(true);
         grid.setFocusableInTouchMode(false);
         grid.setChoiceMode(GridView.CHOICE_MODE_SINGLE);
@@ -123,6 +142,13 @@ public class MainActivity extends BaseActivity {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 grid.setItemChecked(position, true);
+                for (int i = 0; i < grid.getChildCount(); i++) {
+                    View child = grid.getChildAt(i);
+                    if (child != null) {
+                        child.setActivated(false);
+                        child.setSelected(false);
+                    }
+                }
                 if (view != null) {
                     view.setActivated(true);
                     view.setSelected(true);
@@ -178,9 +204,15 @@ public class MainActivity extends BaseActivity {
         setContentView(root);
     }
 
+    private void updateCategoryTabs() {
+        for (int i = 0; i < categoryButtons.size() && i < categories.length; i++) {
+            categoryButtons.get(i).setSelected(categories[i] == selected);
+        }
+    }
+
     private void loadSelected() {
         if (!hasApiUrl()) return;
-        status.setText("正在加载：" + selected.title);
+        status.setText("正在加载 · " + selected.title);
         if ("record".equals(selected.type)) {
             loadRecords();
         } else {
@@ -202,7 +234,7 @@ public class MainActivity extends BaseActivity {
                         }
                     }
                     adapter.setItems(items);
-                    status.setText(items.size() == 0 ? "暂无内容" : selected.title);
+                    status.setText(items.size() == 0 ? "暂无内容" : selected.title + " · " + items.size());
                 }
 
                 @Override
@@ -308,7 +340,7 @@ public class MainActivity extends BaseActivity {
         }
 
         adapter.setItems(items);
-        status.setText(items.size() == 0 ? "暂无播放记录" : "最近播放");
+        status.setText(items.size() == 0 ? "暂无播放记录" : "最近播放 · " + items.size());
     }
 
     private void open(PosterItem item) {

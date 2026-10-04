@@ -99,8 +99,6 @@ public class PosterGridAdapter extends BaseAdapter {
         PosterItem item = items.get(position);
         holder.title.setText(item.title == null ? "" : item.title);
         holder.subtitle.setText(item.subtitle == null ? "" : item.subtitle);
-        holder.image.setImageResource(R.drawable.poster_placeholder);
-
         boolean activated = false;
         if (parent instanceof AbsListView) {
             AbsListView listView = (AbsListView) parent;
@@ -110,10 +108,8 @@ public class PosterGridAdapter extends BaseAdapter {
         convertView.setActivated(activated);
         convertView.setSelected(activated);
 
-        if (item.poster != null && item.poster.length() > 0) {
-            com.oriontv.legacy.App.get().api().loadImage(
-                    item.poster, holder.image, R.drawable.poster_placeholder);
-        }
+        com.oriontv.legacy.App.get().api().loadImage(
+                item.poster, holder.image, R.drawable.poster_placeholder);
         return convertView;
     }
 

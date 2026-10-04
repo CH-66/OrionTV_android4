@@ -3,21 +3,21 @@
         <shape android:shape="rectangle">
             <solid android:color="@color/orion_selected" />
             <stroke android:width="2dp" android:color="@color/orion_focus" />
-            <corners android:radius="10dp" />
+            <corners android:radius="12dp" />
         </shape>
     </item>
-    <item android:state_pressed="true">
+    <item android:state_selected="true">
         <shape android:shape="rectangle">
-            <solid android:color="#254A32" />
+            <solid android:color="#1D432B" />
             <stroke android:width="1dp" android:color="@color/orion_accent" />
-            <corners android:radius="10dp" />
+            <corners android:radius="12dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/orion_panel" />
-            <stroke android:width="1dp" android:color="#2A3930" />
-            <corners android:radius="10dp" />
+            <solid android:color="#141B17" />
+            <stroke android:width="1dp" android:color="#26322B" />
+            <corners android:radius="12dp" />
         </shape>
     </item>
 </selector>

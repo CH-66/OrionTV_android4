@@ -59,25 +59,32 @@ public class PosterGridAdapter extends BaseAdapter {
             root.setOrientation(LinearLayout.VERTICAL);
             root.setGravity(Gravity.CENTER_HORIZONTAL);
             root.setBackgroundResource(R.drawable.focus_panel);
-            root.setPadding(Ui.dp(activity, 6), Ui.dp(activity, 6), Ui.dp(activity, 6), Ui.dp(activity, 6));
-            root.setLayoutParams(new AbsListView.LayoutParams(Ui.dp(activity, 150), Ui.dp(activity, 245)));
+            root.setPadding(Ui.dp(activity, 5), Ui.dp(activity, 5), Ui.dp(activity, 5), Ui.dp(activity, 5));
+            root.setLayoutParams(new AbsListView.LayoutParams(Ui.dp(activity, 164), Ui.dp(activity, 270)));
 
             ImageView image = new ImageView(activity);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
             image.setImageResource(R.drawable.poster_placeholder);
-            root.addView(image, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(activity, 190)));
+            root.addView(image, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(activity, 210)));
 
             TextView title = new TextView(activity);
-            title.setTextColor(Color.WHITE);
+            title.setTextColor(activity.getResources().getColor(R.color.orion_text));
             title.setTextSize(14);
             title.setSingleLine(true);
-            root.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(activity, 28)));
+            title.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+            title.setPadding(Ui.dp(activity, 3), 0, Ui.dp(activity, 3), 0);
+            root.addView(title, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(activity, 30)));
 
             TextView subtitle = new TextView(activity);
-            subtitle.setTextColor(Color.rgb(180, 180, 180));
+            subtitle.setTextColor(activity.getResources().getColor(R.color.orion_muted));
             subtitle.setTextSize(12);
             subtitle.setSingleLine(true);
-            root.addView(subtitle, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(activity, 20)));
+            subtitle.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+            subtitle.setPadding(Ui.dp(activity, 3), 0, Ui.dp(activity, 3), 0);
+            root.addView(subtitle, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(activity, 20)));
 
             holder = new Holder();
             holder.image = image;
@@ -93,16 +100,19 @@ public class PosterGridAdapter extends BaseAdapter {
         holder.title.setText(item.title == null ? "" : item.title);
         holder.subtitle.setText(item.subtitle == null ? "" : item.subtitle);
         holder.image.setImageResource(R.drawable.poster_placeholder);
+
         boolean activated = false;
         if (parent instanceof AbsListView) {
             AbsListView listView = (AbsListView) parent;
-            activated = listView.isItemChecked(position) || position == listView.getSelectedItemPosition();
+            activated = listView.isItemChecked(position)
+                    || position == listView.getSelectedItemPosition();
         }
         convertView.setActivated(activated);
         convertView.setSelected(activated);
+
         if (item.poster != null && item.poster.length() > 0) {
-            activity.getApplicationContext();
-            com.oriontv.legacy.App.get().api().loadImage(item.poster, holder.image, R.drawable.poster_placeholder);
+            com.oriontv.legacy.App.get().api().loadImage(
+                    item.poster, holder.image, R.drawable.poster_placeholder);
         }
         return convertView;
     }

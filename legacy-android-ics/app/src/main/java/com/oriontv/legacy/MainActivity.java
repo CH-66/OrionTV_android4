@@ -32,7 +32,6 @@ public class MainActivity extends BaseActivity {
     private TextView status;
     private Category selected;
     private int pageStart;
-    private View selectedPosterView;
     private GridView posterGrid;
     private boolean initialPosterFocusPending = true;
     private final ArrayList<Button> categoryButtons = new ArrayList<Button>();
@@ -127,47 +126,16 @@ public class MainActivity extends BaseActivity {
         grid.setHorizontalSpacing(Ui.dp(this, 14));
         grid.setVerticalSpacing(Ui.dp(this, 14));
         grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
-        grid.setSelector(android.R.color.transparent);
-        grid.setCacheColorHint(android.graphics.Color.TRANSPARENT);
+        Ui.configureGridFocus(grid);
         grid.setVerticalScrollBarEnabled(false);
-        grid.setScrollingCacheEnabled(false);
         grid.setFocusable(true);
         grid.setFocusableInTouchMode(false);
-        grid.setChoiceMode(GridView.CHOICE_MODE_SINGLE);
-        grid.setDrawSelectorOnTop(true);
         adapter = new PosterGridAdapter(this);
         grid.setAdapter(adapter);
         grid.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 open(adapter.getPosterItem(position));
-            }
-        });
-        grid.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                grid.setItemChecked(position, true);
-
-                // Only update the two cards whose focus state actually changed.
-                // Repainting every visible child made old Android TVs visibly flash.
-                if (selectedPosterView != null && selectedPosterView != view) {
-                    selectedPosterView.setActivated(false);
-                    selectedPosterView.setSelected(false);
-                }
-                if (view != null) {
-                    view.setActivated(true);
-                    view.setSelected(true);
-                    selectedPosterView = view;
-                }
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-                if (selectedPosterView != null) {
-                    selectedPosterView.setActivated(false);
-                    selectedPosterView.setSelected(false);
-                    selectedPosterView = null;
-                }
             }
         });
         grid.setOnKeyListener(new View.OnKeyListener() {
@@ -375,7 +343,6 @@ public class MainActivity extends BaseActivity {
                     return;
                 }
                 posterGrid.setSelection(0);
-                posterGrid.setItemChecked(0, true);
                 posterGrid.requestFocus();
             }
         });

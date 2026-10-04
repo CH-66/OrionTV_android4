@@ -1225,8 +1225,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
     private Button drawerItemButton(final String text, final boolean selected) {
         final Button button = new Button(this);
-        button.setText(text);
-        button.setTextColor(Color.WHITE);
+        button.setText(selected ? "● " + text : text);
+        button.setTextColor(selected ? 0xffbaf7cd : Color.WHITE);
         button.setTextSize(scaledSp(16));
         button.setSingleLine(true);
         button.setFocusable(true);
@@ -1260,11 +1260,16 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     }
 
     private GradientDrawable drawerBackground(boolean focused, boolean selected) {
+        // "Selected/current" is persistent green state; remote focus is a bright
+        // outer ring. When both apply, preserve the green state and add the ring.
+        if (focused && selected) {
+            return roundedBackground(0xff174a2a, 9, 3, 0xffe8fff0);
+        }
         if (focused) {
-            return roundedBackground(0xff22c55e, 9, 2, 0xffffffff);
+            return roundedBackground(0xff121a16, 9, 3, 0xffe8fff0);
         }
         if (selected) {
-            return roundedBackground(0xff203a2b, 9, 1, 0xff34d17a);
+            return roundedBackground(0xff174a2a, 9, 1, 0xff22c55e);
         }
         return roundedBackground(0xcc18231d, 9, 1, 0x33354a3d);
     }

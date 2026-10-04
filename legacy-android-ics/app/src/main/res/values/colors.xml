@@ -4,7 +4,9 @@
     <color name="orion_panel_alt">#1D2A22</color>
     <color name="orion_accent">#22C55E</color>
     <color name="orion_focus">#34D17A</color>
+    <color name="orion_focus_ring">#E8FFF0</color>
     <color name="orion_selected">#203A2B</color>
+    <color name="orion_active">#174A2A</color>
     <color name="orion_text">#F3F7F4</color>
     <color name="orion_muted">#9EAAA3</color>
     <color name="orion_error">#FF6469</color>

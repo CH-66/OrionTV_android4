@@ -99,14 +99,9 @@ public class PosterGridAdapter extends BaseAdapter {
         PosterItem item = items.get(position);
         holder.title.setText(item.title == null ? "" : item.title);
         holder.subtitle.setText(item.subtitle == null ? "" : item.subtitle);
-        boolean activated = false;
-        if (parent instanceof AbsListView) {
-            AbsListView listView = (AbsListView) parent;
-            activated = listView.isItemChecked(position)
-                    || position == listView.getSelectedItemPosition();
-        }
-        convertView.setActivated(activated);
-        convertView.setSelected(activated);
+        // Do not map GridView navigation position into selected/activated state.
+        // Grid focus is rendered by the GridView selector so domain "selected"
+        // remains available for real persisted/current options elsewhere.
 
         com.oriontv.legacy.App.get().api().loadImage(
                 item.poster,

@@ -48,6 +48,7 @@ public class LiveActivity extends BaseActivity {
         root.addView(status);
 
         GridView grid = new GridView(this);
+        Ui.configureGridFocus(grid);
         grid.setNumColumns(4);
         grid.setHorizontalSpacing(Ui.dp(this, 8));
         grid.setVerticalSpacing(Ui.dp(this, 8));

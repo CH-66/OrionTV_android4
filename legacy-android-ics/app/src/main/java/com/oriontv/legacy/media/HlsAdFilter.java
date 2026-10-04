@@ -25,8 +25,12 @@ public final class HlsAdFilter {
     private static final long MAX_MIDROLL_MS = 120000L;
     private static final long MAX_BOUNDARY_ROLL_MS = 90000L;
     private static final long MAX_BOUNDARY_ROLL_WITHOUT_DISCONTINUITY_MS = 60000L;
+    private static final long MAX_SAME_HOST_DISCONTINUITY_MIDROLL_MS = 90000L;
+    private static final long MIN_SAME_HOST_CONTENT_CONTEXT_MS = 180000L;
     private static final int MAX_MIDROLL_SEGMENTS = 30;
     private static final int MAX_BOUNDARY_ROLL_SEGMENTS = 18;
+    private static final int MAX_SAME_HOST_DISCONTINUITY_MIDROLL_SEGMENTS = 24;
+    private static final int MIN_SAME_HOST_CONTENT_CONTEXT_SEGMENTS = 12;
     private static final int MIN_HOST_ANALYSIS_SEGMENTS = 6;
 
     private static final Pattern EXTINF_DURATION =
@@ -235,8 +239,10 @@ public final class HlsAdFilter {
             block.clear();
         }
 
-        // Preserve trailing ENDLIST and other safe metadata. A discontinuity immediately
-        // after a removed ad block is discarded so Stagefright does not reset unnecessarily.
+        // Preserve trailing ENDLIST and all discontinuity metadata. After removing media,
+        // the next kept segment must begin a fresh decode/timestamp epoch on old MTK
+        // Stagefright implementations; suppressing that reset can leave audio advancing
+        // while video remains stuck on the last pre-ad frame.
         if (collectingBlock && !block.isEmpty()) {
             appendBlock(out, block, previousRemoved || justEndedAdBreak);
         }
@@ -274,7 +280,7 @@ public final class HlsAdFilter {
         long durationMs;
         boolean discontinuityBefore;
         boolean drop;
-        boolean stripDiscontinuity;
+        boolean forceDiscontinuityBefore;
     }
 
     private static final class HostRun {
@@ -400,13 +406,53 @@ public final class HlsAdFilter {
             removed += result[0];
             removedMs += result[1];
             if (!next.units.isEmpty()) {
-                next.units.get(0).stripDiscontinuity = true;
+                next.units.get(0).forceDiscontinuityBefore = true;
             }
             diagnostics = appendDiagnostic(
                     diagnostics,
                     "midroll-host:" + shortHost(mid.host)
                             + ":" + mid.durationMs + "ms"
             );
+            diagnostics = appendDiagnostic(diagnostics, "splice-reset");
+        }
+
+        // Same-CDN mid-rolls are invisible to host-based filtering. On legacy MTK HLS
+        // stacks the dangerous shape is a short discontinuity-bounded island between
+        // two long runs of the same dominant content host. Keep this deliberately strict
+        // so normal codec/timestamp transitions are not mistaken for ads.
+        if (dominantHost != null
+                && total >= 30
+                && dominantCount * 100 >= total * 90) {
+            for (int i = 1; i + 1 < runs.size(); i++) {
+                HostRun prev = runs.get(i - 1);
+                HostRun mid = runs.get(i);
+                HostRun next = runs.get(i + 1);
+
+                if (!sameHost(prev.host, dominantHost)
+                        || !sameHost(mid.host, dominantHost)
+                        || !sameHost(next.host, dominantHost)) {
+                    continue;
+                }
+                if (!mid.discontinuityBefore || !next.discontinuityBefore) continue;
+                if (!isShortAdRun(mid,
+                        MAX_SAME_HOST_DISCONTINUITY_MIDROLL_MS,
+                        MAX_SAME_HOST_DISCONTINUITY_MIDROLL_SEGMENTS)) {
+                    continue;
+                }
+                if (!hasLongSameHostContext(prev, mid, next)) continue;
+
+                int[] result = markRunDropped(mid, signature, "D");
+                removed += result[0];
+                removedMs += result[1];
+                if (!next.units.isEmpty()) {
+                    next.units.get(0).forceDiscontinuityBefore = true;
+                }
+                diagnostics = appendDiagnostic(
+                        diagnostics,
+                        "midroll-discontinuity:" + mid.durationMs + "ms"
+                );
+                diagnostics = appendDiagnostic(diagnostics, "splice-reset");
+            }
         }
 
         // Boundary pre-roll/post-roll needs stronger evidence than A-B-A:
@@ -423,9 +469,6 @@ public final class HlsAdFilter {
                 int[] result = markRunDropped(first, signature, "P");
                 removed += result[0];
                 removedMs += result[1];
-                if (!second.units.isEmpty()) {
-                    second.units.get(0).stripDiscontinuity = true;
-                }
                 diagnostics = appendDiagnostic(
                         diagnostics,
                         "preroll-host:" + shortHost(first.host)
@@ -462,16 +505,10 @@ public final class HlsAdFilter {
         for (int i = 0; i < units.size(); i++) {
             SegmentUnit unit = units.get(i);
             if (unit.drop) continue;
-            appendBlock(out, unit.lines, unit.stripDiscontinuity);
+            appendBlock(out, unit.lines, unit.forceDiscontinuityBefore);
         }
         for (int i = 0; i < trailer.size(); i++) {
-            String line = trailer.get(i);
-            if (removed > 0 && line != null
-                    && line.trim().toUpperCase(Locale.US)
-                    .startsWith("#EXT-X-DISCONTINUITY")) {
-                continue;
-            }
-            appendLine(out, line);
+            appendLine(out, trailer.get(i));
         }
 
         return new ForeignBlockResult(
@@ -562,6 +599,21 @@ public final class HlsAdFilter {
                 && run.units.size() <= maxSegments
                 && run.durationMs > 0L
                 && run.durationMs <= maxDurationMs;
+    }
+
+    private static boolean hasLongSameHostContext(
+            HostRun prev, HostRun mid, HostRun next) {
+        if (prev == null || mid == null || next == null) return false;
+        if (prev.units.size() < MIN_SAME_HOST_CONTENT_CONTEXT_SEGMENTS
+                || next.units.size() < MIN_SAME_HOST_CONTENT_CONTEXT_SEGMENTS) {
+            return false;
+        }
+
+        long ratioFloor = mid.durationMs > Long.MAX_VALUE / 4L
+                ? Long.MAX_VALUE
+                : mid.durationMs * 4L;
+        long requiredMs = Math.max(MIN_SAME_HOST_CONTENT_CONTEXT_MS, ratioFloor);
+        return prev.durationMs >= requiredMs && next.durationMs >= requiredMs;
     }
 
     private static int[] markRunDropped(HostRun run, StringBuilder signature, String kind) {
@@ -823,14 +875,12 @@ public final class HlsAdFilter {
     }
 
     private static void appendBlock(StringBuilder out, List<String> block,
-                                    boolean stripDiscontinuity) {
+                                    boolean forceDiscontinuityBefore) {
+        if (forceDiscontinuityBefore && !containsDiscontinuity(block)) {
+            appendLine(out, "#EXT-X-DISCONTINUITY");
+        }
         for (int i = 0; i < block.size(); i++) {
             String line = block.get(i);
-            String trimmed = line == null ? "" : line.trim();
-            if (stripDiscontinuity
-                    && trimmed.toUpperCase(Locale.US).startsWith("#EXT-X-DISCONTINUITY")) {
-                continue;
-            }
             appendLine(out, line == null ? "" : line);
         }
     }

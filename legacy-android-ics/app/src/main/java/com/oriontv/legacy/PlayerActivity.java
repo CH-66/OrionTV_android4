@@ -115,6 +115,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private int lastShownBlockedAdSegments;
     private int lastShownSuppressedInterstitials;
     private boolean adBypassHandled;
+    private long playbackSessionId;
 
     private final Runnable hideChrome = new Runnable() {
         @Override
@@ -182,17 +183,37 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        if (controller != null) {
+            controller.resumeFromLifecycle();
+        }
+        if (!isFinishing()) {
+            handler.removeCallbacks(cacheStatsTicker);
+            handler.post(cacheStatsTicker);
+        }
+    }
+
+    @Override
     protected void onPause() {
         saveRecord(true);
         handler.removeCallbacks(cacheStatsTicker);
-        if (controller != null) controller.release();
+
+        if (isFinishing()) {
+            endPlaybackSession();
+            if (controller != null) controller.destroy();
+        } else if (controller != null) {
+            controller.pauseForLifecycle();
+        }
+
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
-        if (controller != null) controller.release();
+        endPlaybackSession();
+        if (controller != null) controller.destroy();
         super.onDestroy();
     }
 
@@ -1317,8 +1338,9 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         showPlaybackState("正在连接播放线路…", true);
 
         String originalUrl = currentSource.episodes.get(episodeIndex);
-        app.playbackProxy().setPlaybackContext(currentSource.source, safeSourceName(currentSource));
-        app.playbackProxy().resetPlaybackStats();
+        endPlaybackSession();
+        playbackSessionId = app.playbackProxy().beginPlaybackSession(
+                currentSource.source, safeSourceName(currentSource));
         lastShownBlockedAdSegments = 0;
         lastShownSuppressedInterstitials = 0;
         adBypassHandled = false;
@@ -1327,7 +1349,13 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             cacheStatusView.setText("");
         }
         progress.setSecondaryProgress(0);
-        controller.load(buildPlayableUrl(originalUrl));
+        controller.load(buildPlayableUrl(originalUrl, playbackSessionId));
+    }
+
+    private void endPlaybackSession() {
+        if (playbackSessionId <= 0L || app == null) return;
+        app.playbackProxy().endPlaybackSession(playbackSessionId);
+        playbackSessionId = 0L;
     }
 
     private void updateMediaLabels() {
@@ -1345,7 +1373,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         if (sourceButton != null) sourceButton.setText(sources.size() > 1 ? "线路" : "当前线路");
     }
 
-    private String buildPlayableUrl(String originalUrl) {
+    private String buildPlayableUrl(String originalUrl, long sessionId) {
         if (originalUrl == null || originalUrl.length() == 0) return originalUrl;
 
         String upstream = originalUrl;
@@ -1360,7 +1388,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
         String lower = upstream.toLowerCase();
         if (lower.startsWith("http://") || lower.startsWith("https://")) {
-            return app.playbackProxy().proxyUrl(upstream);
+            return app.playbackProxy().proxyUrl(upstream, sessionId);
         }
         return upstream;
     }

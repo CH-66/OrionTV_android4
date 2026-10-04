@@ -62,6 +62,11 @@ public class LegacyPlayerController implements SurfaceHolder.Callback {
         pendingUrl = url;
         lifecyclePaused = false;
         resumeAfterLifecyclePause = false;
+
+        // Invalidate the previous player immediately. If the Surface is temporarily absent,
+        // keeping the old MediaPlayer alive would let surfaceCreated() reattach the old video.
+        releaseMediaPlayer(false);
+
         Log.d(TAG, "load system " + url);
         if (surfaceReady) {
             prepare(url);

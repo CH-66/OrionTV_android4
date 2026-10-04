@@ -19,6 +19,7 @@ on:
   push:
     branches:
       - build/android-ics-20261004
+      - fix/player-session-lifecycle
 
 permissions:
   contents: write

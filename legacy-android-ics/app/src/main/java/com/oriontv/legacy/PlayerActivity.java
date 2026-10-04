@@ -38,6 +38,15 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private static final String VIDEO_PROXY_TOKEN = "4pCCnLfe_qROZ0cGRF1tU1CigWgHDSwNvdbhAsP4Q04";
     private static final int DEFAULT_SEEK_STEP_MS = 10000;
     private static final int DEFAULT_CONTROLS_HIDE_MS = 5000;
+    private static final int ID_PROGRESS = 2100;
+    private static final int ID_PREVIOUS = 2101;
+    private static final int ID_REWIND = 2102;
+    private static final int ID_PLAY_PAUSE = 2103;
+    private static final int ID_FORWARD = 2104;
+    private static final int ID_NEXT = 2105;
+    private static final int ID_EPISODE = 2106;
+    private static final int ID_SOURCE = 2107;
+    private static final int ID_SETTINGS = 2108;
 
     private final Gson gson = new Gson();
     private final PlaybackSourceSelector selector = new PlaybackSourceSelector();
@@ -59,6 +68,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private boolean seekPreviewActive;
     private int seekPreviewBaseMs;
     private int seekPreviewPositionMs;
+    private float uiScale = 1.0f;
 
     private FrameLayout playerRoot;
     private SurfaceView surfaceView;
@@ -77,9 +87,11 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private TextView nextEpisodeText;
     private boolean nextEpisodePromptVisible;
     private int nextEpisodeCountdown;
+    private Button previousButton;
     private Button playPauseButton;
     private Button rewindButton;
     private Button forwardButton;
+    private Button nextButton;
     private Button episodeButton;
     private Button sourceButton;
     private Button settingsButton;
@@ -143,6 +155,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         super.onCreate(savedInstanceState);
         parseIntent();
         loadPlayerSettings();
+        initUiScale();
         buildUi();
         if (!showResumePromptIfNeeded()) {
             playCurrent();
@@ -235,12 +248,12 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
         titleView = new TextView(this);
         titleView.setTextColor(Color.WHITE);
-        titleView.setTextSize(25);
+        titleView.setTextSize(scaledSp(25));
         titleView.setSingleLine(true);
 
         metaView = new TextView(this);
         metaView.setTextColor(0xffb8c0cc);
-        metaView.setTextSize(15);
+        metaView.setTextSize(scaledSp(15));
         metaView.setSingleLine(true);
         metaView.setPadding(0, dp(5), 0, 0);
 
@@ -258,7 +271,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private void buildStatus() {
         statusView = new TextView(this);
         statusView.setTextColor(Color.WHITE);
-        statusView.setTextSize(18);
+        statusView.setTextSize(scaledSp(18));
         statusView.setGravity(Gravity.CENTER);
         statusView.setPadding(dp(26), dp(14), dp(26), dp(14));
         statusView.setBackgroundDrawable(roundedBackground(0xd91a1d22, 14, 0, 0));
@@ -290,7 +303,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
         playbackStateText = new TextView(this);
         playbackStateText.setTextColor(Color.WHITE);
-        playbackStateText.setTextSize(18);
+        playbackStateText.setTextSize(scaledSp(18));
         playbackStateText.setSingleLine(true);
         card.addView(playbackStateText, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(42)));
@@ -334,6 +347,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         durationView = timeText("--:--", Gravity.RIGHT);
 
         progress = new SeekBar(this);
+        progress.setId(ID_PROGRESS);
         progress.setMax(1000);
         progress.setProgress(0);
         progress.setFocusable(true);
@@ -350,12 +364,12 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             @Override public boolean onKey(View v, int keyCode, KeyEvent event) {
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
                 if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                    previewSeekBy(-seekStepMs);
+                    previewSeekBy(acceleratedSeekDelta(event, -1));
                     scheduleHideControls();
                     return true;
                 }
                 if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    previewSeekBy(seekStepMs);
+                    previewSeekBy(acceleratedSeekDelta(event, 1));
                     scheduleHideControls();
                     return true;
                 }
@@ -401,23 +415,34 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         buttons.setGravity(Gravity.CENTER);
         buttons.setPadding(0, dp(12), 0, 0);
 
-        Button previous = playerButton("上一集", false);
+        previousButton = playerButton("上一集", false);
         rewindButton = playerButton(seekButtonLabel(false), false);
         playPauseButton = playerButton("播放", true);
         forwardButton = playerButton(seekButtonLabel(true), false);
-        Button next = playerButton("下一集", false);
+        nextButton = playerButton("下一集", false);
         episodeButton = playerButton("选集", false);
         sourceButton = playerButton("线路", false);
         settingsButton = playerButton("设置", false);
 
-        buttons.addView(previous);
+        previousButton.setId(ID_PREVIOUS);
+        rewindButton.setId(ID_REWIND);
+        playPauseButton.setId(ID_PLAY_PAUSE);
+        forwardButton.setId(ID_FORWARD);
+        nextButton.setId(ID_NEXT);
+        episodeButton.setId(ID_EPISODE);
+        sourceButton.setId(ID_SOURCE);
+        settingsButton.setId(ID_SETTINGS);
+
+        buttons.addView(previousButton);
         buttons.addView(rewindButton);
         buttons.addView(playPauseButton);
         buttons.addView(forwardButton);
-        buttons.addView(next);
+        buttons.addView(nextButton);
         buttons.addView(episodeButton);
         buttons.addView(sourceButton);
         buttons.addView(settingsButton);
+
+        setupBottomFocusGraph();
 
         bottomPanel.addView(progressRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
@@ -431,7 +456,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         bottomParams.setMargins(dp(18), 0, dp(18), dp(16));
         playerRoot.addView(bottomPanel, bottomParams);
 
-        previous.setOnClickListener(new View.OnClickListener() {
+        previousButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { previousEpisode(); }
         });
         rewindButton.setOnClickListener(new View.OnClickListener() {
@@ -443,7 +468,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         forwardButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { seekBy(seekStepMs, "快进 " + (seekStepMs / 1000) + " 秒"); }
         });
-        next.setOnClickListener(new View.OnClickListener() {
+        nextButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { nextEpisode(); }
         });
         episodeButton.setOnClickListener(new View.OnClickListener() {
@@ -455,6 +480,58 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         settingsButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { openSettingsDrawer(); }
         });
+    }
+
+    private void initUiScale() {
+        android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+        float widthScale = metrics.widthPixels > 0 ? metrics.widthPixels / 1280.0f : 1.0f;
+        float heightScale = metrics.heightPixels > 0 ? metrics.heightPixels / 720.0f : 1.0f;
+        uiScale = Math.min(widthScale, heightScale);
+        if (uiScale < 0.82f) uiScale = 0.82f;
+        if (uiScale > 1.22f) uiScale = 1.22f;
+    }
+
+    private float scaledSp(float value) {
+        return value * uiScale;
+    }
+
+    private void setupBottomFocusGraph() {
+        progress.setNextFocusDownId(ID_PLAY_PAUSE);
+
+        previousButton.setNextFocusLeftId(ID_PREVIOUS);
+        previousButton.setNextFocusRightId(ID_REWIND);
+        rewindButton.setNextFocusLeftId(ID_PREVIOUS);
+        rewindButton.setNextFocusRightId(ID_PLAY_PAUSE);
+        playPauseButton.setNextFocusLeftId(ID_REWIND);
+        playPauseButton.setNextFocusRightId(ID_FORWARD);
+        forwardButton.setNextFocusLeftId(ID_PLAY_PAUSE);
+        forwardButton.setNextFocusRightId(ID_NEXT);
+        nextButton.setNextFocusLeftId(ID_FORWARD);
+        nextButton.setNextFocusRightId(ID_EPISODE);
+        episodeButton.setNextFocusLeftId(ID_NEXT);
+        episodeButton.setNextFocusRightId(ID_SOURCE);
+        sourceButton.setNextFocusLeftId(ID_EPISODE);
+        sourceButton.setNextFocusRightId(ID_SETTINGS);
+        settingsButton.setNextFocusLeftId(ID_SOURCE);
+        settingsButton.setNextFocusRightId(ID_SETTINGS);
+
+        Button[] row = new Button[] {
+                previousButton, rewindButton, playPauseButton, forwardButton,
+                nextButton, episodeButton, sourceButton, settingsButton
+        };
+        for (int i = 0; i < row.length; i++) {
+            row[i].setNextFocusUpId(ID_PROGRESS);
+            row[i].setNextFocusDownId(row[i].getId());
+        }
+    }
+
+    private int acceleratedSeekDelta(KeyEvent event, int direction) {
+        int repeat = event == null ? 0 : event.getRepeatCount();
+        int multiplier = 1;
+        if (repeat >= 12) multiplier = 8;
+        else if (repeat >= 7) multiplier = 5;
+        else if (repeat >= 3) multiplier = 3;
+        return direction * seekStepMs * multiplier;
     }
 
     private void loadPlayerSettings() {
@@ -517,14 +594,14 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         TextView heading = new TextView(this);
         heading.setText("继续观看？");
         heading.setTextColor(Color.WHITE);
-        heading.setTextSize(25);
+        heading.setTextSize(scaledSp(25));
         heading.setGravity(Gravity.CENTER);
         card.addView(heading, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
 
         resumeText = new TextView(this);
         resumeText.setTextColor(0xffc1c8d2);
-        resumeText.setTextSize(16);
+        resumeText.setTextSize(scaledSp(16));
         resumeText.setGravity(Gravity.CENTER);
         resumeText.setPadding(0, dp(6), 0, dp(18));
         card.addView(resumeText, new LinearLayout.LayoutParams(
@@ -614,14 +691,14 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         TextView heading = new TextView(this);
         heading.setText("本集播放结束");
         heading.setTextColor(Color.WHITE);
-        heading.setTextSize(24);
+        heading.setTextSize(scaledSp(24));
         heading.setGravity(Gravity.CENTER);
         card.addView(heading, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
 
         nextEpisodeText = new TextView(this);
         nextEpisodeText.setTextColor(0xffc1c8d2);
-        nextEpisodeText.setTextSize(16);
+        nextEpisodeText.setTextSize(scaledSp(16));
         nextEpisodeText.setGravity(Gravity.CENTER);
         card.addView(nextEpisodeText, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(54)));
@@ -712,7 +789,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
 
         drawerTitle = new TextView(this);
         drawerTitle.setTextColor(Color.WHITE);
-        drawerTitle.setTextSize(23);
+        drawerTitle.setTextSize(scaledSp(23));
         drawerTitle.setSingleLine(true);
         drawerTitle.setPadding(dp(4), 0, 0, dp(14));
         drawerPanel.addView(drawerTitle, new LinearLayout.LayoutParams(
@@ -721,7 +798,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         TextView hint = new TextView(this);
         hint.setText("方向键选择  ·  确定进入  ·  返回关闭");
         hint.setTextColor(0xff89929e);
-        hint.setTextSize(13);
+        hint.setTextSize(scaledSp(13));
         hint.setSingleLine(true);
         hint.setPadding(dp(4), 0, 0, dp(12));
         drawerPanel.addView(hint, new LinearLayout.LayoutParams(
@@ -967,7 +1044,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         final Button button = new Button(this);
         button.setText(text);
         button.setTextColor(Color.WHITE);
-        button.setTextSize(16);
+        button.setTextSize(scaledSp(16));
         button.setSingleLine(true);
         button.setFocusable(true);
         button.setFocusableInTouchMode(true);
@@ -1013,7 +1090,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         final Button button = new Button(this);
         button.setText(text);
         button.setTextColor(Color.WHITE);
-        button.setTextSize(14);
+        button.setTextSize(scaledSp(14));
         button.setSingleLine(true);
         button.setFocusable(true);
         button.setFocusableInTouchMode(true);
@@ -1040,7 +1117,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         TextView view = new TextView(this);
         view.setText(text);
         view.setTextColor(0xffd8dde6);
-        view.setTextSize(14);
+        view.setTextSize(scaledSp(14));
         view.setGravity(gravity | Gravity.CENTER_VERTICAL);
         view.setSingleLine(true);
         return view;
@@ -1062,7 +1139,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     }
 
     private int dp(int value) {
-        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+        return (int) (value * getResources().getDisplayMetrics().density * uiScale + 0.5f);
     }
 
     private void playCurrent() {
@@ -1163,8 +1240,14 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         }
 
         if (isMediaKey(key)) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
-                handleMediaKey(key);
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (key == KeyEvent.KEYCODE_MEDIA_REWIND) {
+                    previewSeekBy(acceleratedSeekDelta(event, -1));
+                } else if (key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) {
+                    previewSeekBy(acceleratedSeekDelta(event, 1));
+                } else if (event.getRepeatCount() == 0) {
+                    handleMediaKey(key);
+                }
             }
             return true;
         }
@@ -1172,9 +1255,9 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         if (!controlsVisible && isRemoteNavigationKey(key)) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 if (key == KeyEvent.KEYCODE_DPAD_LEFT) {
-                    previewSeekBy(-seekStepMs);
+                    previewSeekBy(acceleratedSeekDelta(event, -1));
                 } else if (key == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    previewSeekBy(seekStepMs);
+                    previewSeekBy(acceleratedSeekDelta(event, 1));
                 } else {
                     showControls();
                     if (playPauseButton != null) playPauseButton.requestFocus();
@@ -1212,11 +1295,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     }
 
     private void handleMediaKey(int key) {
-        if (key == KeyEvent.KEYCODE_MEDIA_REWIND) {
-            previewSeekBy(-seekStepMs);
-        } else if (key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) {
-            previewSeekBy(seekStepMs);
-        } else if (key == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
+        if (key == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
             previousEpisode();
         } else if (key == KeyEvent.KEYCODE_MEDIA_NEXT) {
             nextEpisode();

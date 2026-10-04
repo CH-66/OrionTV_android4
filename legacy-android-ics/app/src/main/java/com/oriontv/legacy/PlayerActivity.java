@@ -1436,7 +1436,11 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             } else if (drawerVisible) {
                 closeDrawer(true);
             } else if (controlsVisible) {
-                hideControls();
+                if (controller != null && controller.isPlaying()) {
+                    hideControls();
+                } else {
+                    finish();
+                }
             } else {
                 finish();
             }

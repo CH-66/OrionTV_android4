@@ -260,19 +260,19 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private void buildTopBar() {
         topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.VERTICAL);
-        topBar.setPadding(dp(34), dp(24), dp(34), dp(18));
-        topBar.setBackgroundColor(0x99000000);
+        topBar.setPadding(dp(24), dp(12), dp(24), dp(10));
+        topBar.setBackgroundColor(0x78000000);
 
         titleView = new TextView(this);
         titleView.setTextColor(Color.WHITE);
-        titleView.setTextSize(scaledSp(25));
+        titleView.setTextSize(scaledSp(22));
         titleView.setSingleLine(true);
 
         metaView = new TextView(this);
         metaView.setTextColor(0xffb8c0cc);
-        metaView.setTextSize(scaledSp(15));
+        metaView.setTextSize(scaledSp(13));
         metaView.setSingleLine(true);
-        metaView.setPadding(0, dp(5), 0, 0);
+        metaView.setPadding(0, dp(3), 0, 0);
 
         topBar.addView(titleView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -353,8 +353,8 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     private void buildBottomPanel() {
         bottomPanel = new LinearLayout(this);
         bottomPanel.setOrientation(LinearLayout.VERTICAL);
-        bottomPanel.setPadding(dp(28), dp(16), dp(28), dp(20));
-        bottomPanel.setBackgroundDrawable(roundedBackground(0xe6171a1f, 18, 0, 0));
+        bottomPanel.setPadding(dp(18), dp(8), dp(18), dp(10));
+        bottomPanel.setBackgroundDrawable(roundedBackground(0xd91a1e24, 14, 1, 0x223f4956));
 
         LinearLayout progressRow = new LinearLayout(this);
         progressRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -370,10 +370,11 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         progress.setFocusable(true);
         progress.setFocusableInTouchMode(true);
         progress.setKeyProgressIncrement(20);
-        progress.setPadding(dp(4), 0, dp(4), 0);
+        progress.setPadding(dp(2), 0, dp(2), 0);
+        progress.setScaleY(0.72f);
         progress.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override public void onFocusChange(View v, boolean hasFocus) {
-                progress.setScaleY(hasFocus ? 1.25f : 1.0f);
+                progress.setScaleY(hasFocus ? 0.96f : 0.72f);
                 if (hasFocus) scheduleHideControls();
             }
         });
@@ -421,24 +422,24 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
             }
         });
 
-        progressRow.addView(currentTimeView, new LinearLayout.LayoutParams(dp(72), dp(30)));
-        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(0, dp(30), 1);
-        progressParams.setMargins(dp(12), 0, dp(12), 0);
+        progressRow.addView(currentTimeView, new LinearLayout.LayoutParams(dp(62), dp(26)));
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(0, dp(24), 1);
+        progressParams.setMargins(dp(8), 0, dp(8), 0);
         progressRow.addView(progress, progressParams);
-        progressRow.addView(durationView, new LinearLayout.LayoutParams(dp(72), dp(30)));
+        progressRow.addView(durationView, new LinearLayout.LayoutParams(dp(62), dp(26)));
 
         cacheStatusView = new TextView(this);
-        cacheStatusView.setTextColor(0xff8fa2b8);
-        cacheStatusView.setTextSize(scaledSp(12));
-        cacheStatusView.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        cacheStatusView.setTextColor(0xffaeb9c8);
+        cacheStatusView.setTextSize(scaledSp(11));
+        cacheStatusView.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         cacheStatusView.setSingleLine(true);
         cacheStatusView.setVisibility(View.GONE);
-        cacheStatusView.setPadding(dp(4), 0, dp(4), 0);
+        cacheStatusView.setPadding(dp(2), 0, dp(2), 0);
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
         buttons.setGravity(Gravity.CENTER);
-        buttons.setPadding(0, dp(12), 0, 0);
+        buttons.setPadding(0, dp(6), 0, 0);
 
         previousButton = playerButton("上一集", false);
         rewindButton = playerButton(seekButtonLabel(false), false);
@@ -470,17 +471,17 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         setupBottomFocusGraph();
 
         bottomPanel.addView(progressRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
         bottomPanel.addView(cacheStatusView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(22)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(18)));
         bottomPanel.addView(buttons, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
 
         FrameLayout.LayoutParams bottomParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                dp(160),
+                dp(122),
                 Gravity.BOTTOM);
-        bottomParams.setMargins(dp(18), 0, dp(18), dp(16));
+        bottomParams.setMargins(dp(28), 0, dp(28), dp(12));
         playerRoot.addView(bottomPanel, bottomParams);
 
         previousButton.setOnClickListener(new View.OnClickListener() {
@@ -599,7 +600,9 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
     }
 
     private String seekButtonLabel(boolean forward) {
-        return (forward ? "快进 " : "快退 ") + (seekStepMs / 1000) + "秒";
+        return forward
+                ? (seekStepMs / 1000) + "秒 »"
+                : "« " + (seekStepMs / 1000) + "秒";
     }
 
     private void updateSeekButtonLabels() {
@@ -1221,23 +1224,23 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         final Button button = new Button(this);
         button.setText(text);
         button.setTextColor(Color.WHITE);
-        button.setTextSize(scaledSp(14));
+        button.setTextSize(scaledSp(13));
         button.setSingleLine(true);
         button.setFocusable(true);
         button.setFocusableInTouchMode(true);
-        button.setPadding(dp(8), 0, dp(8), 0);
+        button.setPadding(dp(5), 0, dp(5), 0);
         button.setBackgroundDrawable(buttonBackground(false, primary));
 
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(46), 1);
-        params.setMargins(dp(4), 0, dp(4), 0);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(40), 1);
+        params.setMargins(dp(3), 0, dp(3), 0);
         button.setLayoutParams(params);
 
         button.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override
             public void onFocusChange(View v, boolean hasFocus) {
                 button.setBackgroundDrawable(buttonBackground(hasFocus, primary));
-                button.setScaleX(hasFocus ? 1.06f : 1.0f);
-                button.setScaleY(hasFocus ? 1.06f : 1.0f);
+                button.setScaleX(hasFocus ? 1.04f : 1.0f);
+                button.setScaleY(hasFocus ? 1.04f : 1.0f);
                 if (hasFocus) scheduleHideControls();
             }
         });
@@ -1248,7 +1251,7 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         TextView view = new TextView(this);
         view.setText(text);
         view.setTextColor(0xffd8dde6);
-        view.setTextSize(scaledSp(14));
+        view.setTextSize(scaledSp(12));
         view.setGravity(gravity | Gravity.CENTER_VERTICAL);
         view.setSingleLine(true);
         return view;
@@ -1347,29 +1350,28 @@ public class PlayerActivity extends BaseActivity implements LegacyPlayerControll
         progress.setSecondaryProgress(secondary);
 
         StringBuilder text = new StringBuilder();
+        int durationMs = controller == null ? 0 : controller.duration();
+        if (durationMs > 0 && stats.bufferedUntilPermille > 0) {
+            int bufferedMs = (int) ((durationMs * (long) stats.bufferedUntilPermille) / 1000L);
+            text.append("已缓存至 ").append(formatTime(bufferedMs)).append(" · ");
+        }
+
         if (stats.lookAheadTarget > 0) {
             text.append("预缓存 ")
                     .append(stats.lookAheadReady)
                     .append("/")
-                    .append(stats.lookAheadTarget)
-                    .append(" · ")
-                    .append(stats.lookAheadPercent)
-                    .append("%");
+                    .append(stats.lookAheadTarget);
+            if (stats.lookAheadPercent < 100) {
+                text.append(" · ").append(stats.lookAheadPercent).append("%");
+            }
         } else {
             text.append("缓存就绪");
         }
 
         text.append(" · ").append(formatCacheBytes(stats.cachedBytes));
 
-        if (stats.prefetchingSegments > 0) {
-            text.append(" · 缓存中 ").append(stats.prefetchingSegments);
-        }
-
-        if (stats.totalSegments > 0 && stats.currentSegmentIndex >= 0) {
-            text.append(" · ")
-                    .append(stats.currentSegmentIndex + 1)
-                    .append("/")
-                    .append(stats.totalSegments);
+        if (stats.prefetchingSegments > 0 && stats.lookAheadPercent < 100) {
+            text.append(" · 缓存中");
         }
 
         cacheStatusView.setText(text.toString());

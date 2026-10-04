@@ -1,8 +1,11 @@
 package com.oriontv.legacy.media;
 
+import java.net.URI;
 import java.net.URLDecoder;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -77,6 +80,9 @@ public final class HlsAdFilter {
                     metadataOnly.signature);
         }
 
+        ForeignBlockResult foreign = removeSandwichedForeignHostBlocks(playlistUrl, normalized);
+        normalized = foreign.playlist;
+
         String[] lines = normalized.split("\n", -1);
         StringBuilder out = new StringBuilder(normalized.length());
         List<String> pending = new ArrayList<String>();
@@ -88,11 +94,12 @@ public final class HlsAdFilter {
         boolean previousRemoved = false;
         boolean justEndedAdBreak = false;
 
-        int removedSegments = 0;
-        long removedDurationMs = 0L;
+        int removedSegments = foreign.removedSegments;
+        long removedDurationMs = foreign.removedDurationMs;
         int suppressedInterstitials = 0;
-        int detectedMarkers = 0;
+        int detectedMarkers = foreign.removedSegments > 0 ? 1 : 0;
         StringBuilder signature = new StringBuilder();
+        signature.append(foreign.signature);
 
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i] == null ? "" : lines[i];
@@ -184,6 +191,268 @@ public final class HlsAdFilter {
                 false,
                 Integer.toHexString(signature.toString().hashCode())
         );
+    }
+
+    private static final class SegmentUnit {
+        final List<String> lines = new ArrayList<String>();
+        String uri;
+        String host;
+        long durationMs;
+        boolean discontinuityBefore;
+        boolean drop;
+        boolean stripDiscontinuity;
+    }
+
+    private static final class SegmentBlock {
+        final List<SegmentUnit> units = new ArrayList<SegmentUnit>();
+        String host;
+        long durationMs;
+    }
+
+    private static final class ForeignBlockResult {
+        final String playlist;
+        final int removedSegments;
+        final long removedDurationMs;
+        final String signature;
+
+        ForeignBlockResult(String playlist, int removedSegments,
+                           long removedDurationMs, String signature) {
+            this.playlist = playlist;
+            this.removedSegments = removedSegments;
+            this.removedDurationMs = removedDurationMs;
+            this.signature = signature == null ? "" : signature;
+        }
+    }
+
+    private static ForeignBlockResult removeSandwichedForeignHostBlocks(
+            String playlistUrl, String body) {
+        String[] lines = body.split("\n", -1);
+        List<String> header = new ArrayList<String>();
+        List<String> pending = new ArrayList<String>();
+        List<String> trailer = new ArrayList<String>();
+        List<SegmentUnit> units = new ArrayList<SegmentUnit>();
+
+        boolean seenSegment = false;
+        boolean collecting = false;
+        SegmentUnit current = null;
+
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i] == null ? "" : lines[i];
+            String trimmed = line.trim();
+            String upper = trimmed.toUpperCase(Locale.US);
+
+            if (!collecting && upper.startsWith("#EXTINF")) {
+                current = new SegmentUnit();
+                if (seenSegment && !pending.isEmpty()) {
+                    current.lines.addAll(pending);
+                    pending.clear();
+                }
+                current.lines.add(line);
+                current.durationMs = parseExtinfMs(trimmed);
+                current.discontinuityBefore = containsDiscontinuity(current.lines);
+                collecting = true;
+                continue;
+            }
+
+            if (collecting) {
+                current.lines.add(line);
+                if (trimmed.length() > 0 && !trimmed.startsWith("#")) {
+                    current.uri = trimmed;
+                    current.host = effectiveHost(playlistUrl, trimmed);
+                    units.add(current);
+                    current = null;
+                    collecting = false;
+                    seenSegment = true;
+                }
+                continue;
+            }
+
+            if (!seenSegment) {
+                header.add(line);
+            } else {
+                pending.add(line);
+            }
+        }
+
+        if (collecting && current != null) {
+            pending.addAll(current.lines);
+        }
+        trailer.addAll(pending);
+
+        if (units.size() < 5) {
+            return new ForeignBlockResult(body, 0, 0L, "");
+        }
+
+        List<SegmentBlock> blocks = new ArrayList<SegmentBlock>();
+        SegmentBlock block = null;
+        for (int i = 0; i < units.size(); i++) {
+            SegmentUnit unit = units.get(i);
+            if (block == null || (unit.discontinuityBefore && !block.units.isEmpty())) {
+                block = new SegmentBlock();
+                blocks.add(block);
+            }
+            block.units.add(unit);
+            block.durationMs += unit.durationMs;
+        }
+
+        for (int i = 0; i < blocks.size(); i++) {
+            SegmentBlock b = blocks.get(i);
+            b.host = stableHost(b.units);
+        }
+
+        int removed = 0;
+        long removedMs = 0L;
+        StringBuilder signature = new StringBuilder();
+
+        for (int i = 1; i + 1 < blocks.size(); i++) {
+            SegmentBlock prev = blocks.get(i - 1);
+            SegmentBlock mid = blocks.get(i);
+            SegmentBlock next = blocks.get(i + 1);
+
+            if (prev.host == null || mid.host == null || next.host == null) continue;
+            if (!prev.host.equalsIgnoreCase(next.host)) continue;
+            if (prev.host.equalsIgnoreCase(mid.host)) continue;
+            if (prev.units.size() < 2 || next.units.size() < 2) continue;
+            if (mid.units.size() == 0 || mid.units.size() > 30) continue;
+            if (mid.durationMs <= 0L || mid.durationMs > 120000L) continue;
+
+            for (int j = 0; j < mid.units.size(); j++) {
+                SegmentUnit unit = mid.units.get(j);
+                if (!unit.drop) {
+                    unit.drop = true;
+                    removed++;
+                    removedMs += unit.durationMs;
+                    signature.append("H|").append(unit.uri).append('|');
+                }
+            }
+
+            if (!next.units.isEmpty()) {
+                next.units.get(0).stripDiscontinuity = true;
+            }
+        }
+
+        if (removed == 0) {
+            return new ForeignBlockResult(body, 0, 0L, "");
+        }
+
+        StringBuilder out = new StringBuilder(body.length());
+        for (int i = 0; i < header.size(); i++) {
+            appendLine(out, header.get(i));
+        }
+        for (int i = 0; i < units.size(); i++) {
+            SegmentUnit unit = units.get(i);
+            if (unit.drop) continue;
+            appendBlock(out, unit.lines, unit.stripDiscontinuity);
+        }
+        for (int i = 0; i < trailer.size(); i++) {
+            String line = trailer.get(i);
+            if (removed > 0 && line != null
+                    && line.trim().toUpperCase(Locale.US)
+                    .startsWith("#EXT-X-DISCONTINUITY")) {
+                continue;
+            }
+            appendLine(out, line);
+        }
+
+        return new ForeignBlockResult(
+                out.toString(), removed, removedMs,
+                Integer.toHexString(signature.toString().hashCode()));
+    }
+
+    private static String stableHost(List<SegmentUnit> units) {
+        if (units == null || units.size() == 0) return null;
+        String host = null;
+        for (int i = 0; i < units.size(); i++) {
+            String candidate = units.get(i).host;
+            if (candidate == null || candidate.length() == 0) return null;
+            if (host == null) {
+                host = candidate;
+            } else if (!host.equalsIgnoreCase(candidate)) {
+                return null;
+            }
+        }
+        return host;
+    }
+
+    private static boolean containsDiscontinuity(List<String> lines) {
+        if (lines == null) return false;
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (line != null && line.trim().toUpperCase(Locale.US)
+                    .startsWith("#EXT-X-DISCONTINUITY")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static long parseExtinfMs(String line) {
+        if (line == null) return 0L;
+        Matcher matcher = EXTINF_DURATION.matcher(line.trim());
+        if (!matcher.find()) return 0L;
+        try {
+            return Math.max(0L, (long) (Double.parseDouble(matcher.group(1)) * 1000.0));
+        } catch (RuntimeException ignored) {
+            return 0L;
+        }
+    }
+
+    private static String effectiveHost(String playlistUrl, String segmentUri) {
+        if (segmentUri == null || segmentUri.length() == 0) return null;
+
+        String nested = queryTarget(segmentUri);
+        if (nested != null) {
+            String nestedHost = uriHost(nested);
+            if (nestedHost != null) return nestedHost;
+        }
+
+        String direct = uriHost(segmentUri);
+        if (direct != null) return direct;
+
+        try {
+            URI base = URI.create(playlistUrl);
+            URI resolved = base.resolve(segmentUri);
+            String nestedResolved = queryTarget(resolved.toString());
+            if (nestedResolved != null) {
+                String nestedHost = uriHost(nestedResolved);
+                if (nestedHost != null) return nestedHost;
+            }
+            return resolved.getHost();
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static String queryTarget(String value) {
+        if (value == null) return null;
+        int q = value.indexOf('?');
+        if (q < 0 || q + 1 >= value.length()) return null;
+        String query = value.substring(q + 1);
+        String[] parts = query.split("&");
+        for (int i = 0; i < parts.length; i++) {
+            String part = parts[i];
+            int eq = part.indexOf('=');
+            if (eq <= 0) continue;
+            String key = part.substring(0, eq);
+            if (!"u".equalsIgnoreCase(key) && !"url".equalsIgnoreCase(key)) continue;
+            try {
+                return URLDecoder.decode(part.substring(eq + 1), "UTF-8");
+            } catch (Exception ignored) {
+                return part.substring(eq + 1);
+            }
+        }
+        return null;
+    }
+
+    private static String uriHost(String value) {
+        if (value == null) return null;
+        try {
+            URI uri = URI.create(value);
+            String host = uri.getHost();
+            if (host != null && host.length() > 0) return host.toLowerCase(Locale.US);
+        } catch (RuntimeException ignored) {
+        }
+        return null;
     }
 
     private static Result suppressInterstitialMetadata(String body) {

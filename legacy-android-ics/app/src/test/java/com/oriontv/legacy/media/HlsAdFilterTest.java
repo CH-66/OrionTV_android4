@@ -10,8 +10,8 @@ public class HlsAdFilterTest {
     @Test
     public void removesForeignHostPrerollWithoutDiscontinuity() {
         String body = playlist(
-                seg("https://ads.example.net/a1.ts"),
-                seg("https://ads.example.net/a2.ts"),
+                seg("https://altcdn.example.net/a1.ts"),
+                seg("https://altcdn.example.net/a2.ts"),
                 seg("https://video.example.com/v1.ts"),
                 seg("https://video.example.com/v2.ts"),
                 seg("https://video.example.com/v3.ts"),
@@ -24,7 +24,7 @@ public class HlsAdFilterTest {
                 "https://video.example.com/master.m3u8", body);
 
         assertEquals(2, result.removedSegments);
-        assertFalse(result.playlist.contains("ads.example.net"));
+        assertFalse(result.playlist.contains("altcdn.example.net"));
         assertTrue(result.playlist.contains("v1.ts"));
         assertTrue(result.diagnostics.contains("preroll-host"));
     }
@@ -38,15 +38,15 @@ public class HlsAdFilterTest {
                 seg("https://video.example.com/v4.ts"),
                 seg("https://video.example.com/v5.ts"),
                 seg("https://video.example.com/v6.ts"),
-                "#EXT-X-DISCONTINUITY\n" + seg("https://ads.example.net/a1.ts"),
-                seg("https://ads.example.net/a2.ts")
+                "#EXT-X-DISCONTINUITY\n" + seg("https://altcdn.example.net/a1.ts"),
+                seg("https://altcdn.example.net/a2.ts")
         );
 
         HlsAdFilter.Result result = HlsAdFilter.filter(
                 "https://video.example.com/master.m3u8", body);
 
         assertEquals(2, result.removedSegments);
-        assertFalse(result.playlist.contains("ads.example.net"));
+        assertFalse(result.playlist.contains("altcdn.example.net"));
         assertTrue(result.diagnostics.contains("postroll-host"));
     }
 
@@ -56,8 +56,8 @@ public class HlsAdFilterTest {
                 seg("https://video.example.com/v1.ts"),
                 seg("https://video.example.com/v2.ts"),
                 seg("https://video.example.com/v3.ts"),
-                seg("https://ads.example.net/a1.ts"),
-                seg("https://ads.example.net/a2.ts"),
+                seg("https://altcdn.example.net/a1.ts"),
+                seg("https://altcdn.example.net/a2.ts"),
                 seg("https://video.example.com/v4.ts"),
                 seg("https://video.example.com/v5.ts"),
                 seg("https://video.example.com/v6.ts")
@@ -67,7 +67,7 @@ public class HlsAdFilterTest {
                 "https://video.example.com/master.m3u8", body);
 
         assertEquals(2, result.removedSegments);
-        assertFalse(result.playlist.contains("ads.example.net"));
+        assertFalse(result.playlist.contains("altcdn.example.net"));
         assertTrue(result.diagnostics.contains("midroll-host"));
     }
 
